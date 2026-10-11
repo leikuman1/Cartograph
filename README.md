@@ -1,36 +1,83 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cartograph
 
-## Getting Started
+A local dependency-map app for public TypeScript and JavaScript repositories.
+Phase 1 implements authentication, teams, themes, and the application shell.
 
-First, run the development server:
+## Local setup
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
+The project uses Node.js 22+ and pnpm 10.31.0. With the dependencies installed,
+copy `.env.example` to `.env.local` and fill in these four values:
+
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`: the Clerk publishable key.
+- `CLERK_SECRET_KEY`: the matching Clerk secret key (server only).
+- `NEXT_PUBLIC_SUPABASE_URL`: the Supabase project URL.
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: the Supabase publishable key, never a service-role or secret key.
+
+Missing or blank configuration fails during startup and build. Authentication
+paths are `/sign-in` and `/sign-up`; every enabled method finishes at `/`.
+
+```sh
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Clerk configuration
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+In Clerk Dashboard, under **Organizations > Settings**:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Enable Organizations with **Membership required** (Personal Accounts disabled).
+2. Enable **Create first organization automatically**. Clerk handles creation and
+   activation as part of sign-in, including the organization invitation flow.
+3. Keep the default creator/member roles, `org:admin` and `org:member`.
 
-## Learn More
+Automatic first-organization creation is a Clerk setting, not a custom webhook
+or a second onboarding flow. Without it, new users will be asked to create an
+organization by Clerk. Enable these settings before running the acceptance check.
+The application rejects sessions without an active organization.
 
-To learn more about Next.js, take a look at the following resources:
+Enable the desired sign-in methods under **User & authentication**. Keep email
+addresses enabled for organization invitations; email/password sign-in itself
+is optional. Register the application's `/sign-in` and `/sign-up` URLs in
+Clerk's application paths. No provider-specific authentication code is needed.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Use **Team > Send invitation** in the app. Invitations are created on the server
+with the default member role and this app's `/sign-in` URL. The prebuilt Clerk
+sign-in/sign-up components consume the invitation ticket. No invitations are
+sent until an admin submits the form. The organization switcher's Manage link
+also opens this page, and its create-organization flow skips the default invite
+screen so all app invitations use the same return address.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Reference: [Organization settings](https://clerk.com/docs/guides/organizations/configure)
+and [Organization invitations](https://clerk.com/docs/guides/organizations/add-members/invitations).
 
-## Deploy on Vercel
+## Supabase configuration
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Activate the **Supabase integration** in Clerk, then add **Clerk** under
+**Authentication > Sign In / Providers > Third-party Auth** in Supabase using
+the Clerk domain provided by the integration.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The integration adds `role: "authenticated"` to Clerk session tokens. Clerk
+also carries the active organization in its default session claims: `o.id` in
+v2 tokens (`org_id` in older tokens). Future RLS policies must read that claim.
+No custom JWT template, shared signing secret, Supabase Auth session, or table
+is needed in this phase.
+
+`createSupabaseClient()` is server-only and request-scoped. It requires a signed-in
+organization, checks the authenticated role, and forwards the Clerk token through
+Supabase's `accessToken` callback on each request. Missing tokens fail instead of
+falling back to anonymous access. Nothing queries the database in Phase 1.
+
+Reference: [Supabase's Clerk integration](https://supabase.com/docs/guides/auth/third-party/clerk).
+
+## Checks
+
+```sh
+pnpm typecheck
+pnpm lint
+pnpm build
+```
+
+Run the browser acceptance check in `docs/specs/phase-01.md` manually. The
+workspace shows the organization ID (or its slug) from the server-rendered
+session, and switching teams refreshes that server state. Theme choices are
+saved in local storage and applied to the root `data-theme` attribute before
+paint. System mode follows OS changes; explicit light and dark override them.
