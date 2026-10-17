@@ -3,6 +3,7 @@ import "server-only";
 import { createClient } from "@supabase/supabase-js";
 import { requireOrganization } from "@/lib/auth";
 import { getEnvironment } from "@/lib/env";
+import type { Database } from "./database.types";
 
 export async function createSupabaseClient() {
   const session = await requireOrganization();
@@ -12,7 +13,7 @@ export async function createSupabaseClient() {
     throw new Error("Enable the Clerk Supabase integration so session tokens carry role: authenticated.");
   }
 
-  return createClient(supabaseUrl, supabasePublishableKey, {
+  return createClient<Database>(supabaseUrl, supabasePublishableKey, {
     // Clerk owns the session. Never create or refresh a second Supabase session.
     accessToken: async () => {
       const token = await session.getToken();

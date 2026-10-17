@@ -29,5 +29,7 @@ export function getEnvironment() {
     throw new Error("NEXT_PUBLIC_SUPABASE_URL must be an absolute HTTP(S) URL.");
   }
 
-  return { clerkPublishableKey, clerkSecretKey, supabaseUrl, supabasePublishableKey };
+  return {
+    clerkPublishableKey, clerkSecretKey, supabaseUrl, supabasePublishableKey,
+  };
 }
