@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:migrate": "node --env-file=.env.local scripts/database.mjs migrate",
+    "db:verify": "node --env-file=.env.local scripts/database.mjs verify",
+    "db:advisors": "node --env-file=.env.local scripts/database.mjs advisors",
+    "db:sync-organizations": "node --env-file=.env.local scripts/organizations.mjs",
+    "db:seed": "node --env-file=.env.local scripts/seed.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.14",
@@ -23,6 +28,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
+    "supabase": "2.121.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   },
