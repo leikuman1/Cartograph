@@ -1,5 +1,3 @@
-import { getEnvironment } from "./lib/env";
-
 export function register() {
-  getEnvironment();
+  // Workspace credentials are checked at its request boundary, so preview stays offline.
 }
