@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { checkDatabase, clerkRequest, createAdminClient, reportFailure, syncOrganization } from "./lib/clients.mjs";
 
-export async function synchronizeOrganizations(client, request = clerkRequest) {
+export async function synchronizeOrganizations(client, request = clerkRequest, { confirmDelete = false } = {}) {
   const currentIds = new Set();
   let expectedTotal;
   // Pagination of one snapshot, not background polling.
@@ -46,6 +46,19 @@ export async function synchronizeOrganizations(client, request = clerkRequest) {
     }
   }
 
+  // A valid key for a different Clerk instance also returns 404 for these IDs.
+  // Require confirmation before any writes, even when only one organization is missing.
+  if (deletedIds.length > 0 && confirmDelete !== true) {
+    throw new Error([
+      `Deletion requires confirmation for ${deletedIds.length} organization(s):`,
+      ...deletedIds.map(id => `  ${id}`),
+      "Deleting an organization also deletes all its business data through cascading foreign keys.",
+      "Check that CLERK_SECRET_KEY belongs to the intended Clerk instance and verify these IDs.",
+      "Then rerun pnpm db:sync-organizations --confirm-delete to confirm deletion.",
+      "No database writes were made.",
+    ].join("\n"));
+  }
+
   for (const id of currentIds) await syncOrganization(client, id);
   for (const id of deletedIds) await syncOrganization(client, id, true);
   return { synchronized: currentIds.size, deleted: deletedIds.length };
@@ -53,7 +66,13 @@ export async function synchronizeOrganizations(client, request = clerkRequest) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const result = await synchronizeOrganizations(createAdminClient());
+    const args = process.argv.slice(2);
+    if (args.some(arg => arg !== "--confirm-delete")) {
+      throw new Error("Usage: pnpm db:sync-organizations [--confirm-delete]");
+    }
+    const result = await synchronizeOrganizations(createAdminClient(), clerkRequest, {
+      confirmDelete: args.includes("--confirm-delete"),
+    });
     console.log(`Organizations synchronized: ${result.synchronized}; deleted: ${result.deleted}.`);
   } catch (error) {
     reportFailure(error);

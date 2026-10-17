@@ -113,12 +113,24 @@ After creating or deleting organizations in Clerk, run:
 pnpm db:sync-organizations
 ```
 
-This command reads all Clerk organizations, backfills the registry, and checks
-each potentially deleted organization individually. Only a Clerk 404 permits
-deleting its registry row and cascading its business data. API failures stop the
-command; rerunning it is safe. Deletions in Clerk are reflected after this command
-runs, not immediately. No webhook endpoint, signing secret, deployment, or public
-tunnel is required. This is an explicit local command, not background polling.
+This command reads all Clerk organizations and checks each potentially deleted
+organization individually. If every stored organization still exists, it backfills
+the registry normally. If any ID returns 404, it lists the pending deletion IDs and
+count, then stops before any database writes. A 404 can also mean that
+`CLERK_SECRET_KEY` points to a different Clerk instance, so verify the key's
+instance and the entire deletion list before confirming:
+
+```sh
+pnpm db:sync-organizations --confirm-delete
+```
+
+Confirmation is required even for one organization: deleting its registry row
+cascades to all its business data. The confirmed command checks Clerk again and
+only deletes IDs that individually return 404; it is not a saved deletion plan.
+API failures stop the command, including when confirmation is supplied. Deletions
+in Clerk are reflected after a confirmed run, not immediately. No webhook endpoint,
+signing secret, deployment, or public tunnel is required. This is an explicit
+local command, not background polling.
 
 For Phase 2 acceptance, create two organizations in Clerk, then pass their real
 IDs (shown below the dashboard title) to:
