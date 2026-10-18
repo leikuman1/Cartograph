@@ -11,7 +11,10 @@ import {
   ROWS_PER_PANEL, panelFiles, selectionContext, shortestUniqueLabels, visibleConnections,
   type FolderGroup, type Selection, type VisibleConnection,
 } from "@/lib/canvas/graph";
+import { repositoryDetails } from "@/lib/canvas/details";
 import { fitViewport, layoutFolders } from "@/lib/canvas/layout";
+import CategoryMark from "./category-mark";
+import DetailPanel from "./detail-panel";
 import { routeBounds, routeConnections, type ConnectionRoute } from "@/lib/canvas/routing";
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
@@ -26,9 +29,12 @@ type FolderData = {
   dimmed: boolean;
   selection: Selection;
   related: ReadonlySet<string>;
+  hovered: boolean;
+  hoveredFiles: ReadonlySet<string>;
   onToggle: (id: string) => void;
   onSelect: (path: string) => void;
   onPage: (id: string, page: number) => void;
+  onHover: (selection: Selection) => void;
 };
 type FolderNode = Node<FolderData, "folder">;
 type ImportEdge = Edge<{ connection: VisibleConnection; route: ConnectionRoute; highlighted: boolean }, "import">;
@@ -41,11 +47,6 @@ function Ports({ top, suffix = "" }: { top: number | string; suffix?: string }) 
   </>;
 }
 
-function CategoryMark({ path }: { path: string }) {
-  const category = categories.find(category => category.id === fileCategory(path));
-  return <span className={`category-mark category-${category?.id}`} title={category?.label}>{category?.code}</span>;
-}
-
 function Folder({ data }: NodeProps<FolderNode>) {
   const { group, open, rows, page, selection, related } = data;
   const updateInternals = useUpdateNodeInternals();
@@ -56,9 +57,11 @@ function Folder({ data }: NodeProps<FolderNode>) {
   const hidden = group.files.length - rows.length;
   const pageCount = Math.ceil(group.files.length / ROWS_PER_PANEL);
   const title = `${group.path} · ${group.files.length} files · ${group.fanIn} external dependents · ${group.fanOut} external dependencies`;
-  return <article className={`folder-object ${open ? "folder-open" : "folder-closed"} ${data.dimmed ? "is-dimmed" : ""} ${selected ? "is-selected" : ""}`} aria-label={title}>
+  return <article className={`folder-object ${open ? "folder-open" : "folder-closed"} ${data.dimmed && !data.hovered ? "is-dimmed" : ""} ${selected ? "is-selected" : ""} ${data.hovered ? "is-hovered" : ""}`} aria-label={title}>
     {!open && <Ports top="50%" />}
-    <button type="button" className="folder-heading nodrag" onClick={() => data.onToggle(group.id)} aria-expanded={open} title={`${title} · ${open ? "Collapse" : "Expand"}`}>
+    <button type="button" className="folder-heading nodrag" onClick={() => data.onToggle(group.id)} aria-expanded={open} title={`${title} · ${open ? "Collapse" : "Expand"}`}
+      onMouseEnter={() => data.onHover({ kind: "folder", id: group.id })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) data.onHover(null); }}
+      onFocus={() => data.onHover({ kind: "folder", id: group.id })} onBlur={() => data.onHover(null)}>
       <span className="folder-name"><span aria-hidden="true" className="folder-chevron">{open ? "−" : "+"}</span>{data.label}</span>
       <span className="folder-stats"><span>{group.files.length} files</span><span title="Distinct files outside this folder that import it">in {group.fanIn}</span><span title="Distinct files outside this folder that it imports">out {group.fanOut}</span></span>
     </button>
@@ -66,10 +69,13 @@ function Folder({ data }: NodeProps<FolderNode>) {
       <div className="folder-rows">
         {rows.map((file, index) => {
           const isSelected = selection?.kind === "file" && selection.path === file.path;
-          const dimmed = selection !== null && !related.has(file.path);
+          const hovered = data.hoveredFiles.has(file.path);
+          const dimmed = selection !== null && !related.has(file.path) && !hovered;
           return <div key={file.path} className={`file-row-wrap ${dimmed ? "is-dimmed" : ""}`}>
             <Ports top={PANEL_HEADER_HEIGHT + index * FILE_ROW_HEIGHT + FILE_ROW_HEIGHT / 2} suffix={`:${file.path}`} />
-            <button type="button" className={`file-row nodrag ${isSelected ? "is-selected" : ""}`} onClick={() => data.onSelect(file.path)} aria-pressed={isSelected} title={`${file.path} · ${file.fanIn} dependents · ${file.fanOut} dependencies`}>
+            <button type="button" className={`file-row nodrag ${isSelected ? "is-selected" : ""} ${hovered ? "is-hovered" : ""}`} data-file-path={file.path} onClick={() => data.onSelect(file.path)} aria-pressed={isSelected} title={`${file.path} · ${file.fanIn} dependents · ${file.fanOut} dependencies`}
+              onMouseEnter={() => data.onHover({ kind: "file", path: file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) data.onHover(null); }}
+              onFocus={() => data.onHover({ kind: "file", path: file.path })} onBlur={() => data.onHover(null)}>
               <CategoryMark path={file.path} />
               <span className="file-name">{data.labels.get(file.path) ?? file.path}</span>
               <span className="file-fans"><span title={`${file.fanIn} files import this file`}>in {file.fanIn}</span> <span title={`This file imports ${file.fanOut} files`}>out {file.fanOut}</span></span>
@@ -79,7 +85,7 @@ function Folder({ data }: NodeProps<FolderNode>) {
       </div>
       <div className="folder-footer">
         {hidden > 0 && <Ports top={PANEL_HEADER_HEIGHT + rows.length * FILE_ROW_HEIGHT + 15} suffix=":overflow" />}
-        <span title="Edges for rows on other pages attach here">{hidden > 0 ? `+${hidden} files not shown` : "All files shown"}</span>
+        <span className={group.files.some(file => data.hoveredFiles.has(file.path) && !rows.some(row => row.path === file.path)) ? "overflow-highlight" : undefined} title="Edges for rows on other pages attach here">{hidden > 0 ? `+${hidden} files not shown` : "All files shown"}</span>
         {pageCount > 1 && <span className="folder-pagination nodrag">
           <button type="button" disabled={page === 0} onClick={() => data.onPage(group.id, page - 1)} aria-label={`Previous files in ${group.path}`}>‹</button>
           <span>{page + 1}/{pageCount}</span>
@@ -118,7 +124,7 @@ function ImportConnection(props: EdgeProps<ImportEdge>) {
 const nodeTypes = { folder: Folder };
 const edgeTypes = { import: ImportConnection };
 
-function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect: (path: string) => void }) {
+function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect: (path: string, focusInMap?: boolean) => void }) {
   const imports = useMemo(() => {
     const result = new Map<string, string[]>();
     for (const edge of analysis.edges) {
@@ -132,7 +138,8 @@ function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect:
     <caption className="sr-only">Parsed files and their resolved dependencies</caption>
     <thead><tr><th>File</th><th>Kind</th><th>In</th><th>Out</th><th>Resolved imports</th></tr></thead>
     <tbody>{analysis.files.map(file => <tr key={file.path}>
-      <td><button type="button" onClick={() => onSelect(file.path)} className="table-file">{file.path}</button></td>
+      {/* Keyboard activation reports detail 0; only then does the unmounted table need to hand focus to the map. */}
+      <td><button type="button" onClick={event => onSelect(file.path, event.detail === 0)} className="table-file">{file.path}</button></td>
       <td><CategoryMark path={file.path} /> {categories.find(category => category.id === fileCategory(file.path))?.label}</td>
       <td>{file.fanIn}</td><td>{file.fanOut}</td>
       <td>{file.fanOut > 0 ? <details><summary>{file.fanOut} dependencies</summary>{imports.get(file.path)?.map(target => <p key={target} className="font-mono">{target}</p>)}</details> : "—"}</td>
@@ -140,11 +147,13 @@ function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect:
   </table></div>;
 }
 
-function Canvas({ analysis }: { analysis: AnalysisResult }) {
+function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; repositoryName: string }) {
   const folded = useMemo(() => foldFolders(analysis.files, analysis.edges), [analysis]);
+  const details = useMemo(() => repositoryDetails(analysis.files, analysis.edges), [analysis]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [pages, setPages] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [selection, setSelection] = useState<Selection>(null);
+  const [hover, setHover] = useState<Selection>(null);
   const [view, setView] = useState<"map" | "table">("map");
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [ready, setReady] = useState(false);
@@ -152,17 +161,16 @@ function Canvas({ analysis }: { analysis: AnalysisResult }) {
   const frame = useRef<HTMLDivElement>(null);
   const instance = useReactFlow<FolderNode, ImportEdge>();
   const needsFit = useRef(true);
+  const pendingFocus = useRef<string | null>(null);
   const connections = useMemo(() => visibleConnections(folded, analysis.edges, expanded, pages), [folded, analysis.edges, expanded, pages]);
   const positions = useMemo(() => layoutFolders(folded, expanded, pages, connections), [folded, expanded, pages, connections]);
   const routes = useMemo(() => routeConnections(folded, positions, connections, pages), [folded, positions, connections, pages]);
   const bounds = useMemo(() => [routeBounds(positions, routes)], [positions, routes]);
   const context = useMemo(() => selectionContext(folded, analysis.edges, selection), [folded, analysis.edges, selection]);
   const labels = useMemo(() => shortestUniqueLabels(folded.groups.flatMap(group => [group.path, ...(expanded.has(group.id) ? panelFiles(group, pages.get(group.id) ?? 0).map(file => file.path) : [])])), [folded, expanded, pages]);
-  const categoryCounts = useMemo(() => {
-    const counts = { source: 0, test: 0, declaration: 0 };
-    for (const file of analysis.files) counts[fileCategory(file.path)] += 1;
-    return counts;
-  }, [analysis.files]);
+  const hoveredFiles = useMemo(() => new Set(hover?.kind === "file" ? [hover.path] : hover?.kind === "folder" ? folded.groups.find(group => group.id === hover.id)?.files.map(file => file.path) : []), [folded, hover]);
+  const hoveredFolder = hover?.kind === "file" ? folded.owner.get(hover.path) : hover?.kind === "folder" ? hover.id : null;
+  const categoryCounts = details.categoryCounts;
 
   useEffect(() => {
     const element = frame.current;
@@ -183,6 +191,16 @@ function Canvas({ analysis }: { analysis: AnalysisResult }) {
     void instance.setViewport(viewport, { duration: 0 });
   }, [bounds, dimensions, instance, ready, view]);
 
+  useEffect(() => {
+    const path = pendingFocus.current;
+    if (!path || view !== "map" || !ready) return;
+    // The file row only exists after the folder expansion and page change render.
+    const row = frame.current?.querySelector<HTMLButtonElement>(`[data-file-path="${CSS.escape(path)}"]`);
+    if (!row) return;
+    pendingFocus.current = null;
+    row.focus();
+  }, [expanded, pages, ready, view]);
+
   const toggle = useCallback((id: string) => {
     needsFit.current = true;
     setExpanded(current => {
@@ -194,6 +212,24 @@ function Canvas({ analysis }: { analysis: AnalysisResult }) {
     setSelection({ kind: "folder", id });
   }, []);
   const selectFile = useCallback((path: string) => setSelection({ kind: "file", path }), []);
+  const revealFile = useCallback((path: string, focusInMap = false) => {
+    const id = folded.owner.get(path);
+    const group = folded.groups.find(group => group.id === id);
+    if (!id || !group) throw new Error(`Missing folder for ${path}`);
+    const index = group.files.findIndex(file => file.path === path);
+    if (index < 0) throw new Error(`Missing file ${path}`);
+    needsFit.current = true;
+    pendingFocus.current = focusInMap ? path : null;
+    setPages(current => new Map(current).set(id, Math.floor(index / ROWS_PER_PANEL)));
+    setExpanded(current => new Set(current).add(id));
+    setHover(null);
+    selectFile(path);
+    setView("map");
+  }, [folded, selectFile]);
+  const clearSelection = useCallback(() => {
+    setSelection(null);
+    setHover(null);
+  }, []);
   const changePage = useCallback((id: string, page: number) => {
     needsFit.current = true;
     setPages(current => new Map(current).set(id, page));
@@ -209,7 +245,8 @@ function Canvas({ analysis }: { analysis: AnalysisResult }) {
       style: { width: position.width, height: position.height, pointerEvents: "all" },
       data: { group, label: position.label, labels, open: expanded.has(group.id), page, rows: panelFiles(group, page),
         dimmed: selection !== null && !context.visibleGroups.has(group.id), selection, related: context.visibleFiles,
-        onToggle: toggle, onSelect: selectFile, onPage: changePage },
+        hovered: hoveredFolder === group.id, hoveredFiles,
+        onToggle: toggle, onSelect: selectFile, onPage: changePage, onHover: setHover },
     };
   });
   const edges: ImportEdge[] = connections.map(connection => {
@@ -227,7 +264,7 @@ function Canvas({ analysis }: { analysis: AnalysisResult }) {
     };
   });
   const selectedLabel = selection?.kind === "file" ? selection.path : selection?.kind === "folder" ? folded.groups.find(group => group.id === selection.id)?.path : null;
-  return <div className="canvas-workspace">
+  return <div className="canvas-workspace" onKeyDown={event => { if (event.key === "Escape") clearSelection(); }}>
     <aside className="category-sidebar" aria-label="File categories">
       <h2>File kinds</h2>
       {categories.map(category => <button key={category.id} type="button" className="category-item" aria-disabled="true" title="Categories are informational in this preview">
@@ -249,35 +286,27 @@ function Canvas({ analysis }: { analysis: AnalysisResult }) {
         <span>{folded.groups.length} folders · threshold {folded.threshold}</span>
         <button type="button" className="control map-fit" onClick={() => { void instance.setViewport(fitViewport(bounds, dimensions.width, dimensions.height, 1), { duration: 0 }); }}>Fit map</button>
       </div>
-      <div className="map-frame" ref={frame} onKeyDown={event => { if (event.key === "Escape") setSelection(null); }}>
+      <div className="map-frame" ref={frame}>
         <div className="flow-layer" style={{ visibility: view === "map" ? "visible" : "hidden" }} aria-hidden={view !== "map"}>
           <ReactFlow<FolderNode, ImportEdge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
             onInit={() => setReady(true)} onMove={(_, viewport) => setZoom(viewport.zoom)}
             nodesDraggable={false} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false}
             elementsSelectable={false} edgesReconnectable={false} deleteKeyCode={null} zoomOnDoubleClick={false}
-            minZoom={0.01} maxZoom={2} onPaneClick={() => setSelection(null)} colorMode="system"
+            minZoom={0.01} maxZoom={2} onPaneClick={clearSelection} colorMode="system"
             aria-label="Repository imports; click a folder to expand, a file to select, background to clear">
             <Controls showInteractive={false} showFitView={false} />
           </ReactFlow>
         </div>
-        {view === "table" && <FileTable analysis={analysis} onSelect={path => {
-          const id = folded.owner.get(path);
-          if (!id) return;
-          const group = folded.groups.find(group => group.id === id);
-          if (!group) return;
-          needsFit.current = true;
-          setPages(current => new Map(current).set(id, Math.floor(group.files.findIndex(file => file.path === path) / ROWS_PER_PANEL)));
-          setExpanded(current => new Set(current).add(id));
-          selectFile(path);
-          setView("map");
-        }} />}
+        {view === "table" && <FileTable analysis={analysis} onSelect={revealFile} />}
       </div>
-      <footer className="map-status"><span title={selectedLabel ?? undefined}>{selectedLabel ?? "Click a folder to expand · select a file to trace imports"}</span>{selection && <button type="button" onClick={() => setSelection(null)}>Clear selection</button>}<span>{Math.round(zoom * 100)}%</span></footer>
+      <footer className="map-status"><span title={selectedLabel ?? undefined}>{selectedLabel ?? "Click a folder to expand · select a file to trace imports"}</span>{selection && <button type="button" onClick={clearSelection}>Clear selection</button>}<span>{Math.round(zoom * 100)}%</span></footer>
     </section>
-    <aside className="detail-column" aria-label="Details" />
+    <DetailPanel repositoryName={repositoryName} details={details} edgeCount={analysis.edges.length} selection={selection}
+      group={selection?.kind === "folder" ? folded.groups.find(group => group.id === selection.id) : undefined}
+      hoveredFiles={hoveredFiles} hoveredFolder={hoveredFolder ?? null} onSelect={revealFile} onHover={setHover} onClear={clearSelection} />
   </div>;
 }
 
-export default function DependencyCanvas({ analysis }: { analysis: AnalysisResult }) {
-  return <ReactFlowProvider><Canvas analysis={analysis} /></ReactFlowProvider>;
+export default function DependencyCanvas({ analysis, repositoryName }: { analysis: AnalysisResult; repositoryName: string }) {
+  return <ReactFlowProvider><Canvas analysis={analysis} repositoryName={repositoryName} /></ReactFlowProvider>;
 }

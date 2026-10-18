@@ -16,7 +16,7 @@ export default function PreviewPage() {
       <ThemeControl />
     </header>
     <main id="main-content" className="preview-main" tabIndex={-1}>
-      <DependencyCanvas analysis={analysis} />
+      <DependencyCanvas analysis={analysis} repositoryName={repository.name} />
     </main>
   </div>;
 }
