@@ -1,21 +1,5 @@
-import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
-import { Suspense } from "react";
-import AuthControls from "./auth-controls";
-import ThemeControl from "./theme-control";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Cartograph",
@@ -28,9 +12,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       data-theme="system"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className="h-full antialiased"
     >
       <head>
+        {/* System fonts keep the preview and builds independent of font services. */}
+        <style>{`:root {
+          --font-geist-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }`}</style>
         {/* Apply the saved preference before paint; CSS resolves system changes. */}
         <script
           dangerouslySetInnerHTML={{
@@ -39,43 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         />
       </head>
       <body className="flex min-h-full flex-col font-sans text-sm">
-        <Suspense fallback={<p className="p-4 text-muted" role="status">Loading workspace…</p>}>
-          <ClerkProvider
-            dynamic
-            signInUrl="/sign-in"
-            signUpUrl="/sign-up"
-            signInForceRedirectUrl="/"
-            signUpForceRedirectUrl="/"
-            afterSignOutUrl="/sign-in"
-            appearance={{
-              variables: {
-                colorPrimary: "var(--accent)",
-                colorBackground: "var(--surface)",
-                colorForeground: "var(--foreground)",
-                colorMuted: "var(--background)",
-                colorMutedForeground: "var(--muted)",
-                colorInput: "var(--surface)",
-                colorInputForeground: "var(--foreground)",
-                colorNeutral: "var(--foreground)",
-                fontFamily: "var(--font-geist-sans), sans-serif",
-                fontSize: "0.8125rem",
-                borderRadius: "0.375rem",
-              },
-            }}
-          >
-            <a href="#main-content" className="skip-link">Skip to content</a>
-            <header className="flex min-h-12 flex-wrap items-center gap-x-5 gap-y-2 border-b border-border bg-surface px-4 py-2">
-              <Link href="/" className="font-semibold">Cartograph</Link>
-              <nav aria-label="Account and team" className="flex flex-1 items-center justify-end">
-                <AuthControls />
-              </nav>
-              <ThemeControl />
-            </header>
-            <main id="main-content" className="flex flex-1 flex-col" tabIndex={-1}>
-              {children}
-            </main>
-          </ClerkProvider>
-        </Suspense>
+        {children}
       </body>
     </html>
   );

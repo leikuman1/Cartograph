@@ -1,7 +1,7 @@
 # Cartograph
 
 A local dependency-map app for public TypeScript and JavaScript repositories.
-Includes the organization-isolated dashboard and standalone repository parser.
+Includes an organization-isolated analysis dashboard, standalone parser, and offline canvas preview.
 
 ## Local setup
 
@@ -13,8 +13,11 @@ copy `.env.example` to `.env.local` and fill in these four values:
 - `NEXT_PUBLIC_SUPABASE_URL`: the Supabase project URL.
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: the Supabase publishable key, never a service-role or secret key.
 
-Missing or blank configuration fails during startup and build. Authentication
-paths are `/sign-in` and `/sign-up`; every enabled method finishes at `/`.
+Leave all four values unset or blank for the offline `/preview` and production
+build. If any value is nonblank, startup validates the complete configuration and
+fails on missing or invalid values. Workspace and authentication routes always
+require all four values, including in offline mode. Authentication paths are
+`/sign-in` and `/sign-up`; every enabled method finishes at `/`.
 
 ```sh
 pnpm dev
@@ -75,7 +78,7 @@ In `.env.local`, also set `SUPABASE_SECRET_KEY` (Supabase **Settings > API Keys*
 for administrative scripts and `DATABASE_URL` (Supabase **Connect > Session pooler**,
 with the database password URL-encoded) for migrations and SQL verification.
 Neither is used by the dashboard. The four application variables remain required
-at startup; each administrative command validates its own additional variables.
+for workspace requests; each administrative command validates its own additional variables.
 
 ```sh
 pnpm db:migrate
@@ -144,19 +147,53 @@ per organization, covering all four statuses. Reruns do not duplicate or overwri
 tasks. It inserts no files, edges, routes, explanations, roles, or insights.
 An organization without seeded tasks remains empty.
 
-## Standalone parser (phase 3)
+## Canvas preview (phase 4)
 
-Run `pnpm analyze <repository-directory> --output <result.json>` to parse a local
-TypeScript/JavaScript repository without starting the app, database, or account
-services. Output keeps files, deduplicated edges, import resolutions, and coverage
-under a versioned contract. `pnpm test:parser` checks resolution, exclusions,
-serialization, and the single-unresolved-import rename case.
+Run `pnpm dev` and open `/preview`. This route renders a local, typed parser
+result without Clerk, Supabase, API keys, font services, or runtime network
+requests. The authenticated workspace keeps its original URLs. A fixed
+three-column shell contains the category legend, map, and empty details column.
+
+The sample is the full Hono v4.10.2 repository at commit
+`0c6455dc10db6428257bdd601eca559247e27de6` (MIT; license beside the fixture).
+The parser produced 384 files and 894 edges, with 91 skipped files, 4 unresolved
+imports, and 2 excluded imports. Categories are derived from declaration/test
+filename conventions; all other files remain Source. No parser fields changed.
+
+Click a folder to expand it into file rows; click its header to collapse it.
+Panels show nine rows at a time and count the remaining files. Their pagination
+lets every file be selected. Imports for rows on other pages attach to the
+explicit remaining-files footer. Select a file to retain its direct neighbours
+and connecting edges; click the background or press Escape to clear selection.
+File rows explicitly show `in` (files importing this file) and `out` (files this
+file imports). Internal edges use separate outside lanes and turn into the target
+row from the right. Cross-folder paths avoid card rectangles. A number on a
+highlighted aggregate edge counts its original imports into a collapsed folder.
+Expansion fits the new card and route bounds with zoom capped at the preceding zoom.
+The Files tab provides a searchable-by-browser table of the same real data.
+
+Generate the identical fixture from an unchanged checkout and run terminal checks:
+
+```sh
+git clone --depth 1 --branch v4.10.2 https://github.com/honojs/hono.git ../hono-canvas
+pnpm fixture:canvas ../hono-canvas
+pnpm check:canvas
+pnpm check:preview-offline
+```
+
+`check:canvas` reports the folding threshold, node/file ratio, single-file nodes,
+and missing edge endpoints. It also checks deterministic layout, every panel
+page and row handle, unique labels, and viewport bounds without using a browser.
+`check:preview-offline` builds and requests `/preview` with all four application
+credentials explicitly blank. The browser checks in `docs/specs/phrase-04.md`
+remain manual.
 
 ## Checks
 
 ```sh
 pnpm typecheck
 pnpm lint
+pnpm test:environment
 pnpm build
 node --test scripts/organizations.test.mjs
 ```
