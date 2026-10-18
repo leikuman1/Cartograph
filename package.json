@@ -10,6 +10,7 @@
     "lint": "eslint",
     "analyze": "tsx scripts/analyze.ts",
     "test:parser": "tsx --test lib/parser/parser.test.ts",
+    "test:environment": "tsx --test scripts/environment.test.ts",
     "fixture:canvas": "tsx scripts/canvas-fixture.ts",
     "check:canvas": "tsx scripts/check-canvas.ts",
     "check:preview-offline": "node scripts/check-preview-offline.mjs",

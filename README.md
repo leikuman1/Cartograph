@@ -13,9 +13,11 @@ copy `.env.example` to `.env.local` and fill in these four values:
 - `NEXT_PUBLIC_SUPABASE_URL`: the Supabase project URL.
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: the Supabase publishable key, never a service-role or secret key.
 
-Missing or blank configuration fails when opening workspace or authentication
-routes. `/preview` and production builds need no credentials. Authentication
-paths are `/sign-in` and `/sign-up`; every enabled method finishes at `/`.
+Leave all four values unset or blank for the offline `/preview` and production
+build. If any value is nonblank, startup validates the complete configuration and
+fails on missing or invalid values. Workspace and authentication routes always
+require all four values, including in offline mode. Authentication paths are
+`/sign-in` and `/sign-up`; every enabled method finishes at `/`.
 
 ```sh
 pnpm dev
@@ -191,6 +193,7 @@ remain manual.
 ```sh
 pnpm typecheck
 pnpm lint
+pnpm test:environment
 pnpm build
 node --test scripts/organizations.test.mjs
 ```
