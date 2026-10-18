@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   mkdir,
@@ -232,6 +233,82 @@ test("classifies a resolved file outside the requested root as external", async 
     assert.equal(result.edges.length, 0);
   } finally {
     await rm(parent, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of [
+  { name: "include matches no inputs", extension: ".ts", inputs: { include: ["missing/**/*"] } },
+  { name: "JavaScript files without allowJs", extension: ".js", inputs: {} },
+  { name: "an empty files list", extension: ".ts", inputs: { files: [] } },
+]) {
+  test(`uses compiler options when the configuration has ${scenario.name}`, async () => {
+    const root = await temporaryRepository();
+    try {
+      await writeFixture(root, {
+        "tsconfig.json": JSON.stringify({
+          compilerOptions: {
+            module: "ESNext",
+            moduleResolution: "Bundler",
+            paths: { "@/*": ["./actual/*"] },
+          },
+          ...scenario.inputs,
+        }),
+        [`actual/entry${scenario.extension}`]: 'import { value } from "@/target"; export const result = value;\n',
+        [`actual/target${scenario.extension}`]: "export const value = 1;\n",
+      });
+      const result = await analyzeRepository(root);
+      assert.equal(result.files.length, 2);
+      assert.equal(result.coverage.imports.unresolved, 0);
+      assert.deepEqual(result.edges, [{
+        source: `actual/entry${scenario.extension}`,
+        target: `actual/target${scenario.extension}`,
+        kinds: ["import"],
+      }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("empty input diagnostics do not suppress invalid compiler options", async () => {
+  const root = await temporaryRepository();
+  try {
+    await writeFixture(root, {
+      "entry.ts": "export const value = true;\n",
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { module: "invalid-module-kind" },
+        include: ["missing/**/*"],
+      }),
+    });
+    await assert.rejects(analyzeRepository(root), /TS6046/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the CLI accepts a forwarded separator and keeps unknown options invalid", async () => {
+  const root = await temporaryRepository();
+  const invoke = (args: string[]) => spawnSync(process.execPath, [
+    "--import", "tsx", path.resolve("scripts/analyze.ts"), ...args,
+  ], { encoding: "utf8", timeout: 15000 });
+  try {
+    await writeFixture(root, { "entry.ts": "export const value = 1;\n" });
+    const ordinary = invoke([root]);
+    const separated = invoke(["--", root]);
+    assert.equal(ordinary.status, 0, ordinary.stderr);
+    assert.equal(separated.status, 0, separated.stderr);
+    const result = validateAnalysisResult(JSON.parse(separated.stdout));
+    assert.equal(result.files.length, 1);
+    assert.deepEqual(result, validateAnalysisResult(JSON.parse(ordinary.stdout)));
+
+    const unknown = invoke(["--unknown", root]);
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stderr, /Unknown option: --unknown/);
+    const missing = invoke([]);
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /Usage: pnpm analyze <directory>/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

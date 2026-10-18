@@ -13,6 +13,7 @@ function parseArguments(values: readonly string[]): Arguments {
 
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
+    if (value === "--") continue;
     if (value === "--output") {
       const outputValue = values[index + 1];
       if (!outputValue || output !== null) throw new Error("--output requires one path and may only be used once.");
@@ -26,7 +27,7 @@ function parseArguments(values: readonly string[]): Arguments {
   }
 
   if (directory === null) {
-    throw new Error("Usage: pnpm analyze -- <directory> [--output <json-file>]");
+    throw new Error("Usage: pnpm analyze <directory> [--output <json-file>]");
   }
   return { directory, output };
 }

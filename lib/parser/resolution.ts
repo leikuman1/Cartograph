@@ -5,6 +5,8 @@ import type { ImportResolution, SkippedFile } from "./contract";
 import type { DiscoveredSourceFile } from "./discovery";
 import { toRepositoryPath } from "./discovery";
 
+const EMPTY_INPUT_DIAGNOSTICS = new Set([18002, 18003]);
+
 const DEFAULT_COMPILER_OPTIONS: ts.CompilerOptions = {
   allowJs: true,
   jsx: ts.JsxEmit.Preserve,
@@ -118,10 +120,12 @@ function loadCompilerOptions(configPath: string | null, rootPath: string) {
     getCurrentDirectory: () => rootPath,
     onUnRecoverableConfigFileDiagnostic: diagnostic => unrecoverable.push(diagnostic),
   });
+  // Discovery selects the source files; an empty config input list does not invalidate its options.
   const errors = [
     ...unrecoverable,
     ...(parsed?.errors ?? []),
-  ].filter(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
+  ].filter(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error
+    && !EMPTY_INPUT_DIAGNOSTICS.has(diagnostic.code));
   if (!parsed || errors.length > 0) {
     const details = errors.length > 0 ? `\n${formatDiagnostics(errors)}` : "";
     throw new Error(`Cannot load TypeScript configuration ${configPath}.${details}`);
