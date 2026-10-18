@@ -34,7 +34,7 @@ function FileList({ title, files, counts, empty, scrollable = false, hoveredFile
     {files.length === 0 ? <p className="detail-note">{empty}</p> : <ul className={`detail-file-list ${scrollable ? "detail-list-scroll" : ""}`} aria-label={title} tabIndex={scrollable ? 0 : undefined}>
       {files.map(file => <li key={file.path}>
         <button type="button" className={`detail-file-link ${hoveredFiles.has(file.path) ? "is-hovered" : ""}`}
-          onClick={() => onSelect(file.path)} onMouseEnter={() => onHover({ kind: "file", path: file.path })} onMouseLeave={() => onHover(null)}
+          onClick={() => onSelect(file.path)} onMouseEnter={() => onHover({ kind: "file", path: file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) onHover(null); }}
           onFocus={() => onHover({ kind: "file", path: file.path })} onBlur={() => onHover(null)}>
           <CategoryMark path={file.path} /><span className="detail-path">{file.path}</span>
           {counts && <span className="detail-count" aria-label={`${counts.get(file.path) ?? 0} dependents`}>{counts.get(file.path) ?? 0}</span>}
@@ -76,7 +76,7 @@ export default function DetailPanel({ repositoryName, details, edgeCount, select
     </div>
     <div className="detail-content" role="tabpanel" id={`${id}-content`} aria-labelledby={`${id}-${tab}`} tabIndex={0}>
       {selected ? <button type="button" className={`detail-selected-path detail-file-link ${hoveredFiles.has(selected.file.path) ? "is-hovered" : ""}`}
-        onClick={() => onSelect(selected.file.path)} onMouseEnter={() => onHover({ kind: "file", path: selected.file.path })} onMouseLeave={() => onHover(null)}
+        onClick={() => onSelect(selected.file.path)} onMouseEnter={() => onHover({ kind: "file", path: selected.file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) onHover(null); }}
         onFocus={() => onHover({ kind: "file", path: selected.file.path })} onBlur={() => onHover(null)}>
         <CategoryMark path={selected.file.path} /><span className="detail-path">{selected.file.path}</span>
       </button> : group ? <p className={`detail-folder-path ${hoveredFolder === group.id ? "is-hovered" : ""}`}>{group.path}</p> : <p className="detail-repository-name">{repositoryName}</p>}
