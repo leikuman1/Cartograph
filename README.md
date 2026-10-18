@@ -1,7 +1,7 @@
 # Cartograph
 
 A local dependency-map app for public TypeScript and JavaScript repositories.
-Phase 2 adds the organization-isolated analysis dashboard and versioned database schema.
+Includes the organization-isolated dashboard and standalone repository parser.
 
 ## Local setup
 
@@ -143,6 +143,14 @@ The seed command verifies both IDs in Clerk and adds two labeled sample tasks
 per organization, covering all four statuses. Reruns do not duplicate or overwrite
 tasks. It inserts no files, edges, routes, explanations, roles, or insights.
 An organization without seeded tasks remains empty.
+
+## Standalone parser (phase 3)
+
+Run `pnpm analyze <repository-directory> --output <result.json>` to parse a local
+TypeScript/JavaScript repository without starting the app, database, or account
+services. Output keeps files, deduplicated edges, import resolutions, and coverage
+under a versioned contract. `pnpm test:parser` checks resolution, exclusions,
+serialization, and the single-unresolved-import rename case.
 
 ## Checks
 
