@@ -67,7 +67,7 @@ function Folder({ data }: NodeProps<FolderNode>) {
       onMouseEnter={() => data.onHover({ kind: "folder", id: group.id })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) data.onHover(null); }}
       onFocus={() => data.onHover({ kind: "folder", id: group.id })} onBlur={() => data.onHover(null)}>
       <span className="folder-name"><span aria-hidden="true" className="folder-chevron">{open ? "−" : "+"}</span>{data.label}</span>
-      <span className="folder-stats"><span>{data.category ? `${matching} ${categories.find(category => category.id === data.category)?.label.toLowerCase()} of ${group.files.length}` : `${group.files.length} files`}</span><span title="Distinct files outside this folder that import it">in {group.fanIn}</span><span title="Distinct files outside this folder that it imports">out {group.fanOut}</span></span>
+      <span className="folder-stats"><span className={data.category ? "category-match" : undefined}>{data.category ? `${matching} ${categories.find(category => category.id === data.category)?.label.toLowerCase()} of ${group.files.length}` : `${group.files.length} files`}</span><span title="Distinct files outside this folder that import it">in {group.fanIn}</span><span title="Distinct files outside this folder that it imports">out {group.fanOut}</span></span>
     </button>
     {open && <>
       <div className="folder-rows">

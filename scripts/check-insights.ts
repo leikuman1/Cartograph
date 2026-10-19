@@ -42,6 +42,28 @@ assert.equal(entryReason("src/thing.test.ts"), "test");
 assert(!insights.unimported.some(file => file.path === ".vitest.config/setup-vitest.ts"), "Tool config directories are entry points");
 assert(insights.unimported.some(file => file.path === "src/adapter/aws-lambda/index.ts"), "A real source file with no importer must be reported");
 
+const frameworkEntries = [
+  "app/page.tsx", "app/api/users/route.ts", "app/(site)/layout.tsx",
+  "pages/account/error.tsx", "src/app/blog/[slug]/page.tsx", "src/pages/blog/loading.tsx",
+  "app/template.tsx", "app/@sidebar/default.tsx", "src/app/not-found.tsx",
+  "middleware.ts", "src/middleware.ts", "instrumentation.ts", "src/instrumentation.ts",
+];
+const ordinaryModules = [
+  "src/utils/error.ts", "src/helper/route.ts", "lib/layout.ts", "src/utils/template.ts",
+  "src/ui/loading.tsx", "src/default.ts", "src/page.tsx", "src/not-found.ts",
+  "src/utils/middleware.ts", "src/helper/instrumentation.ts", "app/utils/middleware.ts",
+  "examples/app/error.ts", "lib/pages/route.ts", "src/applications/error.ts",
+];
+for (const path of frameworkEntries) assert.equal(entryReason(path), "framework-entry", path);
+for (const path of ordinaryModules) assert.equal(entryReason(path), null, path);
+const entryFiles: FileNode[] = [...frameworkEntries, ...ordinaryModules].map(path => ({
+  path, folder: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".", module: ".",
+  lineCount: 1, contentHash: "x", fanIn: 0, fanOut: 0,
+}));
+assert.deepEqual(buildInsights(entryFiles, []).unimported.map(file => file.path), [...ordinaryModules].sort(),
+  "Unimported ordinary modules stay visible while framework entries are excluded");
+assert.equal(entryExclusionCounts(entryFiles)["framework-entry"], frameworkEntries.length);
+
 const client = "src/client/client.ts";
 const blast = traverse(analysis.files, analysis.edges, client, "dependents");
 const chain = traverse(analysis.files, analysis.edges, client, "dependencies");

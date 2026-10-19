@@ -66,7 +66,9 @@ export function traverse(
 
 export type EntryReason = "test" | "config" | "framework-entry" | "ambient-declaration";
 
-const FRAMEWORK_ENTRY = /(^|\/)(page|route|layout|template|default|loading|error|not-found|middleware|instrumentation)\.[cm]?[jt]sx?$/;
+// Route filenames are entry conventions only within a routing directory.
+const ROUTE_ENTRY = /^(src\/)?(app|pages)\/(.*\/)?(page|route|layout|template|default|loading|error|not-found)\.[cm]?[jt]sx?$/;
+const ROOT_ENTRY = /^(src\/)?(middleware|instrumentation)\.[cm]?[jt]sx?$/;
 const CONFIG_FILE = /(^|\/)[^/]*\.config\.[cm]?[jt]sx?$/;
 // Tool config often lives in a dot directory, e.g. .vitest.config/setup.ts.
 const CONFIG_DIRECTORY = /(^|\/)\.[^/]*config[^/]*(\/|$)/;
@@ -78,7 +80,7 @@ export function entryReason(path: string): EntryReason | null {
   if (AMBIENT_DECLARATION.test(path)) return "ambient-declaration";
   // Config before test: a vitest config inside a runtime-tests directory is still a tool entry point.
   if (CONFIG_FILE.test(path) || CONFIG_DIRECTORY.test(path)) return "config";
-  if (FRAMEWORK_ENTRY.test(path)) return "framework-entry";
+  if (ROUTE_ENTRY.test(path) || ROOT_ENTRY.test(path)) return "framework-entry";
   if (fileCategory(path) === "test") return "test";
   return null;
 }
