@@ -43,3 +43,24 @@ export function repositoryDetails(files: readonly FileNode[], edges: readonly Gr
 }
 
 export type RepositoryDetails = ReturnType<typeof repositoryDetails>;
+
+export interface ImportedFile extends FileNode {
+  importerCount: number;
+}
+
+export function fileImporters(files: readonly FileNode[], edges: readonly GraphEdge[]) {
+  const importers = new Map<string, Set<string>>(files.map(file => [file.path, new Set<string>()]));
+  for (const edge of edges) {
+    const targets = importers.get(edge.target);
+    if (!targets) throw new Error(`Missing imported file ${edge.target}`);
+    targets.add(edge.source);
+  }
+  return importers;
+}
+
+export function importedFileCounts(files: readonly FileNode[], edges: readonly GraphEdge[]): ImportedFile[] {
+  const importers = fileImporters(files, edges);
+  return files.filter(file => (importers.get(file.path)?.size ?? 0) > 0)
+    .map(file => ({ ...file, importerCount: importers.get(file.path)?.size ?? 0 }))
+    .sort((a, b) => b.importerCount - a.importerCount || compareText(a.path, b.path));
+}

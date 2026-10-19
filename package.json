@@ -14,6 +14,7 @@
     "fixture:canvas": "tsx scripts/canvas-fixture.ts",
     "check:canvas": "tsx scripts/check-canvas.ts",
     "check:details": "tsx scripts/check-details.ts",
+    "check:insights": "tsx scripts/check-insights.ts",
     "check:preview-offline": "node scripts/check-preview-offline.mjs",
     "db:migrate": "node --env-file=.env.local scripts/database.mjs migrate",
     "db:verify": "node --env-file=.env.local scripts/database.mjs verify",

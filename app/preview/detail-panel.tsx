@@ -1,17 +1,23 @@
 "use client";
 
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { FileNode } from "@/lib/parser/contract";
+import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import type { FileNode, GraphEdge } from "@/lib/parser/contract";
 import { categories, fileCategory, type FolderGroup, type Selection } from "@/lib/canvas/graph";
-import { countFileCategories, type RepositoryDetails } from "@/lib/canvas/details";
+import { countFileCategories, importedFileCounts, type RepositoryDetails } from "@/lib/canvas/details";
+import { TRAVERSAL_DEPTH, traverse, type EntryReason, type Insights, type TraversalDirection } from "@/lib/canvas/insights";
 import CategoryMark from "./category-mark";
+import InsightsPanel from "./insights-panel";
 
 type DetailPanelProps = {
   repositoryName: string;
   details: RepositoryDetails;
+  files: readonly FileNode[];
+  edges: readonly GraphEdge[];
   edgeCount: number;
   selection: Selection;
   group: FolderGroup | undefined;
+  entryExclusions: Record<EntryReason, number>;
+  insights: Insights;
   hoveredFiles: ReadonlySet<string>;
   hoveredFolder: string | null;
   onSelect: (path: string) => void;
@@ -48,15 +54,18 @@ function Facts({ children }: { children: ReactNode }) {
   return <dl className="detail-facts">{children}</dl>;
 }
 
-export default function DetailPanel({ repositoryName, details, edgeCount, selection, group, hoveredFiles, hoveredFolder, onSelect, onHover, onClear }: DetailPanelProps) {
+export default function DetailPanel({ repositoryName, details, files, edges, edgeCount, selection, group, entryExclusions, insights, hoveredFiles, hoveredFolder, onSelect, onHover, onClear }: DetailPanelProps) {
   const [tab, setTab] = useState<"structure" | "explanation">("structure");
+  const [traversal, setTraversal] = useState<TraversalDirection | null>(null);
   const id = useId();
   const structureTab = useRef<HTMLButtonElement>(null);
   const explanationTab = useRef<HTMLButtonElement>(null);
   const selected = selection?.kind === "file" ? details.byPath.get(selection.path) : undefined;
   const category = selected ? categories.find(category => category.id === fileCategory(selected.file.path)) : undefined;
   const members = group ? countFileCategories(group.files) : null;
-  const counts = new Map(details.mostImported.map(item => [item.file.path, item.dependents.length]));
+  const counts = useMemo(() => new Map(importedFileCounts(files, edges).map(file => [file.path, file.importerCount])), [edges, files]);
+  const walk = useMemo(() => selected && traversal ? traverse(files, edges, selected.file.path, traversal) : null, [edges, files, selected, traversal]);
+  const excludedEntries = Object.values(entryExclusions).reduce((total, count) => total + count, 0);
   const listProps = { hoveredFiles, onSelect, onHover };
   const title = selected ? "File" : group ? "Folder" : "Repository";
 
@@ -83,6 +92,29 @@ export default function DetailPanel({ repositoryName, details, edgeCount, select
       {tab === "explanation" ? <section className="detail-empty"><h3>No explanation yet</h3><p>Explanations will appear here once generated. No explanation has been generated for this {title.toLowerCase()}.</p></section> : selected ? <>
         <Facts><dt>Kind</dt><dd>{category?.label}</dd><dt>Length</dt><dd>{selected.file.lineCount} lines</dd><dt>Dependencies</dt><dd>{selected.dependencies.length}</dd><dt>Dependents</dt><dd>{selected.dependents.length}</dd></Facts>
         {category?.id === "source" && <p className="detail-note">Source is the fallback kind; no test or declaration convention matched.</p>}
+        <section className="detail-section">
+          <div className="traversal-buttons" role="group" aria-label="Graph traversal">
+            <button type="button" aria-pressed={traversal === "dependents"} onClick={() => setTraversal(traversal === "dependents" ? null : "dependents")}>Blast radius</button>
+            <button type="button" aria-pressed={traversal === "dependencies"} onClick={() => setTraversal(traversal === "dependencies" ? null : "dependencies")}>Dependency chain</button>
+          </div>
+          {walk ? <div className="traversal-result" aria-live="polite">
+            <p className="detail-note">{walk.direction === "dependents"
+              ? `Files affected if this file changes, up to ${TRAVERSAL_DEPTH} steps.`
+              : `Files this file reaches, up to ${TRAVERSAL_DEPTH} steps.`}</p>
+            {walk.levels.map(level => <div key={level.depth} className="traversal-level">
+              <h4>{walk.direction === "dependents" ? "Dependents" : "Dependencies"} · {level.depth} {level.depth === 1 ? "step" : "steps"}<span className="detail-count">{level.files.length}</span></h4>
+              <ul className="detail-file-list">{level.files.map(file => <li key={file.path}>
+                <button type="button" className={`detail-file-link ${hoveredFiles.has(file.path) ? "is-hovered" : ""}`}
+                  onClick={() => onSelect(file.path)} onMouseEnter={() => onHover({ kind: "file", path: file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) onHover(null); }}
+                  onFocus={() => onHover({ kind: "file", path: file.path })} onBlur={() => onHover(null)}>
+                  <CategoryMark path={file.path} /><span className="detail-path">{file.path}</span>
+                </button>
+              </li>)}</ul>
+            </div>)}
+            {walk.files.length === 0 && <p className="detail-note">{walk.direction === "dependents" ? "No parsed file depends on this one." : "This file imports no parsed files."}</p>}
+            <p className="detail-note">{walk.files.length} files at depth {TRAVERSAL_DEPTH} or less.</p>
+          </div> : <p className="detail-note">Both walk the resolved imports, two steps out.</p>}
+        </section>
         <FileList title="Dependencies" files={selected.dependencies} empty="No resolved file dependencies." {...listProps} />
         <FileList title="Dependents" files={selected.dependents} empty="No files import this file." {...listProps} />
       </> : group && members ? <>
@@ -100,6 +132,8 @@ export default function DetailPanel({ repositoryName, details, edgeCount, select
         <FileList title="Start reading" files={details.entryPoints.map(item => item.file)} empty="Every file has at least one dependent." scrollable {...listProps} />
         <p className="detail-note">Files with no dependents, sorted by path.</p>
         <section className="detail-section"><h3>Unclassified by convention<span className="detail-count">{details.categoryCounts.source}</span></h3><p className="detail-note">These files use the fallback Source kind. Only tests and declarations are identified by current filename conventions.</p></section>
+        <p className="detail-note">{excludedEntries} files with no importers are treated as framework or tool entry points and left out of the unimported insight ({entryExclusions.test} tests, {entryExclusions.config} configs, {entryExclusions["framework-entry"]} route files, {entryExclusions["ambient-declaration"]} declarations).</p>
+        <InsightsPanel insights={insights} hoveredFiles={hoveredFiles} onSelect={onSelect} onHover={onHover} />
       </>}
     </div>
   </aside>;

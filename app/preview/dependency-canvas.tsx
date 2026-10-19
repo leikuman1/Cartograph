@@ -3,15 +3,16 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BaseEdge, Controls, Handle, Position, ReactFlow, ReactFlowProvider,
-  useReactFlow, useUpdateNodeInternals, type Edge, type EdgeProps, type Node, type NodeProps,
+  useReactFlow, useStore, useUpdateNodeInternals, type Edge, type EdgeProps, type Node, type NodeProps,
 } from "@xyflow/react";
 import type { AnalysisResult, FileNode } from "@/lib/parser/contract";
 import {
   categories, fileCategory, foldFolders, FILE_ROW_HEIGHT, PANEL_HEADER_HEIGHT,
   ROWS_PER_PANEL, panelFiles, selectionContext, shortestUniqueLabels, visibleConnections,
-  type FolderGroup, type Selection, type VisibleConnection,
+  type FileCategory, type FolderGroup, type Selection, type VisibleConnection,
 } from "@/lib/canvas/graph";
 import { repositoryDetails } from "@/lib/canvas/details";
+import { buildInsights, entryExclusionCounts } from "@/lib/canvas/insights";
 import { fitViewport, layoutFolders } from "@/lib/canvas/layout";
 import CategoryMark from "./category-mark";
 import DetailPanel from "./detail-panel";
@@ -31,6 +32,8 @@ type FolderData = {
   related: ReadonlySet<string>;
   hovered: boolean;
   hoveredFiles: ReadonlySet<string>;
+  category: FileCategory | null;
+  matchingFiles: ReadonlySet<string> | null;
   onToggle: (id: string) => void;
   onSelect: (path: string) => void;
   onPage: (id: string, page: number) => void;
@@ -57,20 +60,22 @@ function Folder({ data }: NodeProps<FolderNode>) {
   const hidden = group.files.length - rows.length;
   const pageCount = Math.ceil(group.files.length / ROWS_PER_PANEL);
   const title = `${group.path} · ${group.files.length} files · ${group.fanIn} external dependents · ${group.fanOut} external dependencies`;
+  const matching = data.category && data.matchingFiles ? group.files.filter(file => data.matchingFiles?.has(file.path)).length : null;
   return <article className={`folder-object ${open ? "folder-open" : "folder-closed"} ${data.dimmed && !data.hovered ? "is-dimmed" : ""} ${selected ? "is-selected" : ""} ${data.hovered ? "is-hovered" : ""}`} aria-label={title}>
     {!open && <Ports top="50%" />}
     <button type="button" className="folder-heading nodrag" onClick={() => data.onToggle(group.id)} aria-expanded={open} title={`${title} · ${open ? "Collapse" : "Expand"}`}
       onMouseEnter={() => data.onHover({ kind: "folder", id: group.id })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) data.onHover(null); }}
       onFocus={() => data.onHover({ kind: "folder", id: group.id })} onBlur={() => data.onHover(null)}>
       <span className="folder-name"><span aria-hidden="true" className="folder-chevron">{open ? "−" : "+"}</span>{data.label}</span>
-      <span className="folder-stats"><span>{group.files.length} files</span><span title="Distinct files outside this folder that import it">in {group.fanIn}</span><span title="Distinct files outside this folder that it imports">out {group.fanOut}</span></span>
+      <span className="folder-stats"><span className={data.category ? "category-match" : undefined}>{data.category ? `${matching} ${categories.find(category => category.id === data.category)?.label.toLowerCase()} of ${group.files.length}` : `${group.files.length} files`}</span><span title="Distinct files outside this folder that import it">in {group.fanIn}</span><span title="Distinct files outside this folder that it imports">out {group.fanOut}</span></span>
     </button>
     {open && <>
       <div className="folder-rows">
         {rows.map((file, index) => {
           const isSelected = selection?.kind === "file" && selection.path === file.path;
           const hovered = data.hoveredFiles.has(file.path);
-          const dimmed = selection !== null && !related.has(file.path) && !hovered;
+          const outsideCategory = data.matchingFiles !== null && !data.matchingFiles.has(file.path);
+          const dimmed = (selection !== null && !related.has(file.path) && !hovered) || (outsideCategory && !hovered);
           return <div key={file.path} className={`file-row-wrap ${dimmed ? "is-dimmed" : ""}`}>
             <Ports top={PANEL_HEADER_HEIGHT + index * FILE_ROW_HEIGHT + FILE_ROW_HEIGHT / 2} suffix={`:${file.path}`} />
             <button type="button" className={`file-row nodrag ${isSelected ? "is-selected" : ""} ${hovered ? "is-hovered" : ""}`} data-file-path={file.path} onClick={() => data.onSelect(file.path)} aria-pressed={isSelected} title={`${file.path} · ${file.fanIn} dependents · ${file.fanOut} dependencies`}
@@ -96,8 +101,16 @@ function Folder({ data }: NodeProps<FolderNode>) {
   </article>;
 }
 
+const BADGE_WIDTH = 20;
+const BADGE_HEIGHT = 14;
+
 function ImportConnection(props: EdgeProps<ImportEdge>) {
   const markerId = useId();
+  // Edges live inside the zoomed viewport, so a fixed size in flow units shrinks
+  // with the map. Counter-scaling keeps the count the same size on screen at any zoom.
+  // Edges without a badge return a constant zoom, so a pan or zoom does not re-render them.
+  const badgeZoom = props.data?.highlighted && props.data.connection.originals.length > 1;
+  const zoom = useStore(store => (badgeZoom ? store.transform[2] : 1));
   const data = props.data;
   if (!data) return null;
   const originals = data.connection.originals;
@@ -114,8 +127,8 @@ function ImportConnection(props: EdgeProps<ImportEdge>) {
     </marker></defs>
     {data.highlighted && <path d={data.route.path} fill="none" stroke="var(--background)" strokeWidth="5" pointerEvents="none" />}
     <BaseEdge id={props.id} path={data.route.path} markerEnd={`url(#${markerId})`} style={props.style} interactionWidth={18} />
-    {data.highlighted && originals.length > 1 && labelSegment && <g className="import-count" transform={`translate(${labelSegment.x},${labelSegment.y})`}>
-      <rect x="-10" y="-7" width="20" height="14" rx="3" />
+    {data.highlighted && originals.length > 1 && labelSegment && <g className="import-count" transform={`translate(${labelSegment.x},${labelSegment.y}) scale(${1 / zoom})`}>
+      <rect x={-BADGE_WIDTH / 2} y={-BADGE_HEIGHT / 2} width={BADGE_WIDTH} height={BADGE_HEIGHT} rx="3" />
       <text textAnchor="middle" dominantBaseline="central">{originals.length}</text>
     </g>}
   </g>;
@@ -150,10 +163,14 @@ function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect:
 function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; repositoryName: string }) {
   const folded = useMemo(() => foldFolders(analysis.files, analysis.edges), [analysis]);
   const details = useMemo(() => repositoryDetails(analysis.files, analysis.edges), [analysis]);
+  const insights = useMemo(() => buildInsights(analysis.files, analysis.edges), [analysis]);
+  const entryExclusions = useMemo(() => entryExclusionCounts(analysis.files.filter(file => file.fanIn === 0)), [analysis.files]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [pages, setPages] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [selection, setSelection] = useState<Selection>(null);
   const [hover, setHover] = useState<Selection>(null);
+  const [category, setCategory] = useState<FileCategory | null>(null);
+  const matchingFiles = useMemo(() => category ? new Set(analysis.files.filter(file => fileCategory(file.path) === category).map(file => file.path)) : null, [analysis.files, category]);
   const [view, setView] = useState<"map" | "table">("map");
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [ready, setReady] = useState(false);
@@ -244,8 +261,8 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
       // React Flow disables pointer events when dragging and built-in selection are off.
       style: { width: position.width, height: position.height, pointerEvents: "all" },
       data: { group, label: position.label, labels, open: expanded.has(group.id), page, rows: panelFiles(group, page),
-        dimmed: selection !== null && !context.visibleGroups.has(group.id), selection, related: context.visibleFiles,
-        hovered: hoveredFolder === group.id, hoveredFiles,
+        dimmed: (selection !== null && !context.visibleGroups.has(group.id)) || (matchingFiles !== null && !group.files.some(file => matchingFiles.has(file.path))),
+        selection, related: context.visibleFiles, hovered: hoveredFolder === group.id, hoveredFiles, category, matchingFiles,
         onToggle: toggle, onSelect: selectFile, onPage: changePage, onHover: setHover },
     };
   });
@@ -267,9 +284,12 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
   return <div className="canvas-workspace" onKeyDown={event => { if (event.key === "Escape") clearSelection(); }}>
     <aside className="category-sidebar" aria-label="File categories">
       <h2>File kinds</h2>
-      {categories.map(category => <button key={category.id} type="button" className="category-item" aria-disabled="true" title="Categories are informational in this preview">
-        <span className={`category-mark category-${category.id}`}>{category.code}</span><span>{category.label}</span><span className="category-count">{categoryCounts[category.id]}</span>
+      {categories.map(item => <button key={item.id} type="button" className="category-item" aria-pressed={category === item.id}
+        title={category === item.id ? `Stop filtering by ${item.label}` : `Dim files that are not ${item.label}`}
+        onClick={() => setCategory(category === item.id ? null : item.id)}>
+        <span className={`category-mark category-${item.id}`}>{item.code}</span><span>{item.label}</span><span className="category-count">{categoryCounts[item.id]}</span>
       </button>)}
+      <p className="sidebar-filter-note">{category ? `Dimming files that are not ${categories.find(item => item.id === category)?.label.toLowerCase()}. Click again to clear.` : "Click a kind to dim the rest."}</p>
       <div className="sidebar-section"><h2>Reading the map</h2><p>Height = dependents</p><p>Width = label length</p><p>In / out = distinct files</p><p>Arrow → dependency</p>
         <p><span className="direction-mark incoming" /> Incoming</p><p><span className="direction-mark outgoing" /> Outgoing</p>
       </div>
@@ -301,7 +321,8 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
       </div>
       <footer className="map-status"><span title={selectedLabel ?? undefined}>{selectedLabel ?? "Click a folder to expand · select a file to trace imports"}</span>{selection && <button type="button" onClick={clearSelection}>Clear selection</button>}<span>{Math.round(zoom * 100)}%</span></footer>
     </section>
-    <DetailPanel repositoryName={repositoryName} details={details} edgeCount={analysis.edges.length} selection={selection}
+    <DetailPanel repositoryName={repositoryName} details={details} files={analysis.files} edges={analysis.edges}
+      edgeCount={analysis.edges.length} selection={selection} entryExclusions={entryExclusions} insights={insights}
       group={selection?.kind === "folder" ? folded.groups.find(group => group.id === selection.id) : undefined}
       hoveredFiles={hoveredFiles} hoveredFolder={hoveredFolder ?? null} onSelect={revealFile} onHover={setHover} onClear={clearSelection} />
   </div>;
