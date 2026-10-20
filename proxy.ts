@@ -1,5 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
+import type { NextFetchEvent, NextRequest } from "next/server";
 import { getEnvironment } from "./lib/env";
 
 const isPublicRoute = createRouteMatcher([
@@ -9,11 +9,6 @@ const isPublicRoute = createRouteMatcher([
 ]);
 
 export default function proxy(request: NextRequest, event: NextFetchEvent) {
-  const { pathname } = request.nextUrl;
-  if (pathname === "/preview" || pathname.startsWith("/preview/")) {
-    return NextResponse.next();
-  }
-
   const { clerkPublishableKey, clerkSecretKey } = getEnvironment();
   return clerkMiddleware(
     async (auth, workspaceRequest) => {

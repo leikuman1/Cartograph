@@ -11,6 +11,9 @@ export function getEnvironment() {
   const clerkSecretKey = required("CLERK_SECRET_KEY");
   const supabaseUrl = required("NEXT_PUBLIC_SUPABASE_URL");
   const supabasePublishableKey = required("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
+  // The pipeline writes through service-role RPCs. This module is imported by
+  // server code only; the secret is never sent to the browser.
+  const supabaseSecretKey = required("SUPABASE_SECRET_KEY");
 
   if (!/^pk_(test|live)_/.test(clerkPublishableKey)) {
     throw new Error("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY must be a Clerk publishable key.");
@@ -30,6 +33,6 @@ export function getEnvironment() {
   }
 
   return {
-    clerkPublishableKey, clerkSecretKey, supabaseUrl, supabasePublishableKey,
+    clerkPublishableKey, clerkSecretKey, supabaseUrl, supabasePublishableKey, supabaseSecretKey,
   };
 }

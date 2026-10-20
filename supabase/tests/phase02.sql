@@ -83,14 +83,17 @@ begin
 end;
 $$;
 
-insert into public.projects (id, organization_id, name, repository_url) values
-  ('10000000-0000-4000-8000-000000000001', 'org_phase02_fixture_a', 'RLS fixture A', 'https://github.com/fixture/a'),
-  ('10000000-0000-4000-8000-000000000002', 'org_phase02_fixture_b', 'RLS fixture B', 'https://github.com/fixture/b');
+insert into public.projects (id, organization_id, name, repository_url, canonical_repository_url) values
+  ('10000000-0000-4000-8000-000000000001', 'org_phase02_fixture_a', 'RLS fixture A', 'https://github.com/fixture/a', 'https://github.com/fixture/a'),
+  ('10000000-0000-4000-8000-000000000002', 'org_phase02_fixture_b', 'RLS fixture B', 'https://github.com/fixture/b', 'https://github.com/fixture/b'),
+  -- Phase 7 allows one analysis per project, so the second analysis in
+  -- organization A needs its own project to keep the visibility counts below.
+  ('10000000-0000-4000-8000-000000000003', 'org_phase02_fixture_a', 'RLS fixture A second', 'https://github.com/fixture/a2', 'https://github.com/fixture/a2');
 
 insert into public.analyses (id, organization_id, project_id, status, is_seed) values
   ('20000000-0000-4000-8000-000000000001', 'org_phase02_fixture_a', '10000000-0000-4000-8000-000000000001', 'completed', true),
   ('20000000-0000-4000-8000-000000000002', 'org_phase02_fixture_b', '10000000-0000-4000-8000-000000000002', 'queued', true),
-  ('20000000-0000-4000-8000-000000000003', 'org_phase02_fixture_a', '10000000-0000-4000-8000-000000000001', 'running', true);
+  ('20000000-0000-4000-8000-000000000003', 'org_phase02_fixture_a', '10000000-0000-4000-8000-000000000003', 'running', true);
 
 insert into public.files (id, organization_id, analysis_id, path) values
   ('30000000-0000-4000-8000-000000000001', 'org_phase02_fixture_a', '20000000-0000-4000-8000-000000000001', 'fixture-a.ts'),
@@ -104,19 +107,23 @@ insert into public.edges (organization_id, analysis_id, source_file_id, target_f
 
 insert into public.routes (organization_id, analysis_id, file_id, method, path) values
   ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', 'GET', '/fixture-a'),
-  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000002', 'GET', '/fixture-b');
+  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000002', 'GET', '/fixture-b'),
+  ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000003', '30000000-0000-4000-8000-000000000003', 'GET', '/fixture-a-second');
 
 insert into public.explanations (organization_id, analysis_id, file_id, content) values
   ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', 'Test fixture A, not a parsed result.'),
-  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000002', 'Test fixture B, not a parsed result.');
+  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000002', 'Test fixture B, not a parsed result.'),
+  ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000003', '30000000-0000-4000-8000-000000000003', 'Test fixture A second, not a parsed result.');
 
 insert into public.file_roles (organization_id, analysis_id, file_id, role) values
   ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', 'fixture'),
-  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000002', 'fixture');
+  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000002', 'fixture'),
+  ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000003', '30000000-0000-4000-8000-000000000003', 'fixture');
 
 insert into public.insights (organization_id, analysis_id, content) values
   ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000001', 'Test fixture A, not an analysis insight.'),
-  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', 'Test fixture B, not an analysis insight.');
+  ('org_phase02_fixture_b', '20000000-0000-4000-8000-000000000002', 'Test fixture B, not an analysis insight.'),
+  ('org_phase02_fixture_a', '20000000-0000-4000-8000-000000000003', 'Test fixture A second, not an analysis insight.');
 
 -- Test both Clerk claim versions using the same unfiltered queries on all tables.
 set local role authenticated;
@@ -143,7 +150,8 @@ begin
       execute format('select count(*) from public.%I', table_name) into visible_count;
       expected_count := case
         when organization is null then 0
-        when organization = 'org_phase02_fixture_a' and table_name in ('analyses', 'files') then 2
+        when organization = 'org_phase02_fixture_a'
+          and table_name in ('projects', 'analyses', 'files', 'routes', 'explanations', 'file_roles', 'insights') then 2
         else 1
       end;
       if visible_count <> expected_count then
@@ -233,11 +241,21 @@ declare
   table_name text;
   statement text;
 begin
+  -- Use a foreign project without an analysis so uniqueness cannot mask its FK.
+  insert into public.projects (id, organization_id, name, repository_url, canonical_repository_url)
+  values ('10000000-0000-4000-8000-000000000004', 'org_phase02_fixture_b',
+    'Foreign project probe', 'https://github.com/fixture/foreign', 'https://github.com/fixture/foreign');
   begin
     insert into public.analyses (organization_id, project_id)
-    values ('org_phase02_fixture_a', '10000000-0000-4000-8000-000000000002');
+    values ('org_phase02_fixture_a', '10000000-0000-4000-8000-000000000004');
     raise exception 'Cross-organization project reference was permitted';
   exception when foreign_key_violation then null;
+  end;
+  begin
+    insert into public.analyses (organization_id, project_id)
+    values ('org_phase02_fixture_a', '10000000-0000-4000-8000-000000000001');
+    raise exception 'A second analysis for one project was permitted';
+  exception when unique_violation then null;
   end;
   begin
     insert into public.files (organization_id, analysis_id, path)

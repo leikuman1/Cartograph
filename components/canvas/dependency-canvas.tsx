@@ -19,6 +19,7 @@ import DetailPanel from "./detail-panel";
 import { routeBounds, routeConnections, type ConnectionRoute } from "@/lib/canvas/routing";
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
+import CoverageBanner from "./coverage-banner";
 
 type FolderData = {
   group: FolderGroup;
@@ -282,6 +283,8 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
   });
   const selectedLabel = selection?.kind === "file" ? selection.path : selection?.kind === "folder" ? folded.groups.find(group => group.id === selection.id)?.path : null;
   return <div className="canvas-workspace" onKeyDown={event => { if (event.key === "Escape") clearSelection(); }}>
+    <CoverageBanner coverage={analysis.coverage} />
+    <div className="canvas-columns">
     <aside className="category-sidebar" aria-label="File categories">
       <h2>File kinds</h2>
       {categories.map(item => <button key={item.id} type="button" className="category-item" aria-pressed={category === item.id}
@@ -325,9 +328,12 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
       edgeCount={analysis.edges.length} selection={selection} entryExclusions={entryExclusions} insights={insights}
       group={selection?.kind === "folder" ? folded.groups.find(group => group.id === selection.id) : undefined}
       hoveredFiles={hoveredFiles} hoveredFolder={hoveredFolder ?? null} onSelect={revealFile} onHover={setHover} onClear={clearSelection} />
+    </div>
   </div>;
 }
 
 export default function DependencyCanvas({ analysis, repositoryName }: { analysis: AnalysisResult; repositoryName: string }) {
-  return <ReactFlowProvider><Canvas analysis={analysis} repositoryName={repositoryName} /></ReactFlowProvider>;
+  return <div className="analysis-shell">
+    <ReactFlowProvider><Canvas analysis={analysis} repositoryName={repositoryName} /></ReactFlowProvider>
+  </div>;
 }

@@ -9,7 +9,7 @@ import type {
   InternalImport,
   SkippedFile,
 } from "./contract";
-import { discoverRepository } from "./discovery";
+import { discoverRepository, type DiscoveryResult } from "./discovery";
 import { buildGraph } from "./graph";
 import { extractImports } from "./imports";
 import {
@@ -19,7 +19,7 @@ import {
 } from "./resolution";
 import { validateAnalysisResult } from "./serialization";
 
-export type { AnalysisResult, RepositoryAdapter };
+export type { AnalysisResult, DiscoveryResult, RepositoryAdapter };
 export { fallbackAdapter } from "./adapter";
 export { readAnalysisResult, writeAnalysisResult } from "./serialization";
 
@@ -69,8 +69,17 @@ export async function analyzeRepository(
   directory: string,
   options: AnalyzeRepositoryOptions = {},
 ): Promise<AnalysisResult> {
+  return analyzeDiscoveredRepository(await discoverRepository(directory), options);
+}
+
+// The pipeline selects once, reports the selection, then parses the same
+// snapshot. Keeping discovery outside this call makes those real stages rather
+// than labels around a single opaque operation.
+export async function analyzeDiscoveredRepository(
+  discovered: DiscoveryResult,
+  options: AnalyzeRepositoryOptions = {},
+): Promise<AnalysisResult> {
   const adapter = options.adapter ?? fallbackAdapter;
-  const discovered = await discoverRepository(directory);
   const parsed = await parseSourceFiles(discovered.rootPath, discovered.sourceFiles);
   const skippedFiles = sortSkippedFiles([
     ...discovered.skippedFiles,
