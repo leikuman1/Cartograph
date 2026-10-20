@@ -92,3 +92,16 @@ button:disabled {
 .skip-link:focus {
   transform: translateY(0);
 }
+
+.stage-list { margin-top: 12px; border-top: 1px solid var(--border); }
+.stage { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.stage-marker { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 50%; color: var(--muted); font: 10px/1 var(--font-geist-mono), monospace; }
+.stage-name { min-width: 52px; font-weight: 600; }
+.stage-message { color: var(--muted); overflow-wrap: anywhere; }
+.stage-done .stage-marker { border-color: var(--incoming, #16804a); color: var(--incoming, #16804a); }
+.stage-active .stage-marker { border-color: var(--accent); color: var(--accent); }
+.stage-stale .stage-marker, .stage-failed .stage-marker { border-color: var(--outgoing, #ac6a08); color: var(--outgoing, #ac6a08); }
+.stage-pending .stage-name, .stage-pending .stage-message { color: var(--muted); }
+.progress-badge { display: inline-block; border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; font-size: 10px; white-space: nowrap; }
+.progress-badge.is-muted { color: var(--muted); }
+.progress-badge.is-stale { border-color: var(--outgoing, #ac6a08); color: var(--outgoing, #ac6a08); }

@@ -142,13 +142,16 @@ function detailFor(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function discoverRepository(directory: string): Promise<DiscoveryResult> {
+export async function discoverRepository(
+  directory: string,
+  omittedFiles: readonly SkippedFile[] = [],
+): Promise<DiscoveryResult> {
   const rootPath = await realpath(directory);
   const rootStats = await stat(rootPath);
   if (!rootStats.isDirectory()) throw new Error(`Repository path is not a directory: ${directory}.`);
 
   const sourceFiles: DiscoveredSourceFile[] = [];
-  const skippedFiles: SkippedFile[] = [];
+  const skippedFiles: SkippedFile[] = [...omittedFiles];
   const excludedDirectories: ExcludedDirectory[] = [];
   const packageDirectories = new Set<string>();
 

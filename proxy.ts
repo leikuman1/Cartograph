@@ -1,5 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
+import type { NextFetchEvent, NextRequest } from "next/server";
 import { getEnvironment } from "./lib/env";
 
 const isPublicRoute = createRouteMatcher([
@@ -9,12 +9,8 @@ const isPublicRoute = createRouteMatcher([
 ]);
 
 export default function proxy(request: NextRequest, event: NextFetchEvent) {
-  const { pathname } = request.nextUrl;
-  if (pathname === "/preview" || pathname.startsWith("/preview/")) {
-    return NextResponse.next();
-  }
-
-  const { clerkPublishableKey, clerkSecretKey } = getEnvironment();
+  // Validate here as well as at startup so a bad key fails with our message.
+  getEnvironment();
   return clerkMiddleware(
     async (auth, workspaceRequest) => {
       if (!isPublicRoute(workspaceRequest)) {
@@ -22,8 +18,9 @@ export default function proxy(request: NextRequest, event: NextFetchEvent) {
       }
     },
     {
-      publishableKey: clerkPublishableKey,
-      secretKey: clerkSecretKey,
+      // Clerk reads both keys from the environment. Passing secretKey here marks
+      // it as propagated request data, which Clerk encrypts and therefore needs
+      // CLERK_ENCRYPTION_KEY for. Nothing here propagates a dynamic key.
       signInUrl: "/sign-in",
       signUpUrl: "/sign-up",
     },

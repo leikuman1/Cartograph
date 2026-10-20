@@ -1,3 +1,5 @@
+Before changing code, read LESSONS.md.
+
 # Cartograph
 
 A local app that reads a public GitHub repo and draws it as a dependency map.

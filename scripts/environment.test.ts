@@ -7,6 +7,7 @@ const credentialNames = [
   "CLERK_SECRET_KEY",
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SECRET_KEY",
 ] as const;
 type Credentials = Partial<Record<(typeof credentialNames)[number], string>>;
 const complete = {
@@ -14,6 +15,7 @@ const complete = {
   CLERK_SECRET_KEY: "sk_test_placeholder",
   NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_placeholder",
+  SUPABASE_SECRET_KEY: "sb_secret_placeholder",
 };
 
 function withCredentials(values: Credentials, check: () => void) {
@@ -33,7 +35,7 @@ function withCredentials(values: Credentials, check: () => void) {
   }
 }
 
-test("startup permits absent, empty, or whitespace-only credentials for offline preview", () => {
+test("startup permits absent, empty, or whitespace-only credentials for offline type generation", () => {
   withCredentials({}, () => assert.doesNotThrow(register));
   for (const blank of ["", " \t "]) {
     withCredentials(Object.fromEntries(credentialNames.map(name => [name, blank])), () => {

@@ -15,7 +15,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className="h-full antialiased"
     >
       <head>
-        {/* System fonts keep the preview and builds independent of font services. */}
+        {/* System fonts keep local use and builds independent of font services. */}
         <style>{`:root {
           --font-geist-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;

@@ -125,7 +125,7 @@ export default function DetailPanel({ repositoryName, details, files, edges, edg
         <FileList title="Files in this folder" files={group.files} empty="No parsed files." {...listProps} />
       </> : <>
         <Facts><dt>Framework</dt><dd>Not detected</dd><dt>Files</dt><dd>{details.byPath.size}</dd><dt>Import edges</dt><dd>{edgeCount}</dd><dt>Routes</dt><dd>Not analyzed</dd></Facts>
-        <p className="detail-note">This preview uses the fallback adapter; framework detection and route extraction have not run.</p>
+        <p className="detail-note">This analysis uses the fallback adapter; framework detection and route extraction have not run.</p>
         <p className="detail-note">Counts below are distinct files connected by resolved imports.</p>
         <FileList title="Most depended on" files={details.mostImported.map(item => item.file)} counts={counts} empty="No files have dependents." scrollable {...listProps} />
         <p className="detail-note">Sorted by dependent count, then file path.</p>

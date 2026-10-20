@@ -1,9 +1,9 @@
-import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { Project, ts, type SourceFile } from "ts-morph";
 import type { ImportResolution, SkippedFile } from "./contract";
 import type { DiscoveredSourceFile } from "./discovery";
 import { toRepositoryPath } from "./discovery";
+import { createRepositoryFileSystem, type RepositoryFileSystem } from "./filesystem";
 
 const EMPTY_INPUT_DIAGNOSTICS = new Set([18002, 18003]);
 
@@ -20,6 +20,7 @@ interface ResolutionContext {
   compilerOptions: ts.CompilerOptions;
   configDirectory: string;
   cache: ts.ModuleResolutionCache;
+  fileSystem: RepositoryFileSystem;
 }
 
 export interface ParsedSourceFile {
@@ -57,25 +58,18 @@ function pathInside(rootPath: string, targetPath: string) {
   return toRepositoryPath(relativePath);
 }
 
-async function isFile(filePath: string) {
-  try {
-    return (await stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function nearestConfig(
+function nearestConfig(
   directory: string,
   rootPath: string,
   cache: Map<string, string | null>,
-): Promise<string | null> {
+  host: ts.ModuleResolutionHost,
+): string | null {
   const cached = cache.get(directory);
   if (cached !== undefined) return cached;
 
   for (const name of ["tsconfig.json", "jsconfig.json"]) {
     const candidate = path.join(directory, name);
-    if (await isFile(candidate)) {
+    if (host.fileExists(candidate)) {
       cache.set(directory, candidate);
       return candidate;
     }
@@ -90,7 +84,7 @@ async function nearestConfig(
   const parentOutsideRoot = parent !== rootPath && pathInside(rootPath, parent) === null;
   const result = parent === directory || parentOutsideRoot
     ? null
-    : await nearestConfig(parent, rootPath, cache);
+    : nearestConfig(parent, rootPath, cache, host);
   cache.set(directory, result);
   return result;
 }
@@ -103,7 +97,7 @@ function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]) {
   }).trim();
 }
 
-function loadCompilerOptions(configPath: string | null, rootPath: string) {
+function loadCompilerOptions(configPath: string | null, rootPath: string, fileSystem: RepositoryFileSystem) {
   if (!configPath) {
     return {
       compilerOptions: DEFAULT_COMPILER_OPTIONS,
@@ -112,14 +106,22 @@ function loadCompilerOptions(configPath: string | null, rootPath: string) {
   }
 
   const unrecoverable: ts.Diagnostic[] = [];
+  fileSystem.blocked.clear();
   const parsed = ts.getParsedCommandLineOfConfigFile(configPath, undefined, {
-    fileExists: ts.sys.fileExists,
-    readDirectory: ts.sys.readDirectory,
-    readFile: ts.sys.readFile,
+    ...fileSystem.host,
+    readFile: filePath => fileSystem.host.readFile(filePath),
+    // Discovery already selected every input. Config globs must not enumerate
+    // the filesystem again or escape the repository through include patterns.
+    readDirectory: () => [],
     useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
     getCurrentDirectory: () => rootPath,
     onUnRecoverableConfigFileDiagnostic: diagnostic => unrecoverable.push(diagnostic),
   });
+  if (fileSystem.blocked.has("symlink-not-followed") || fileSystem.blocked.has("unsupported-file-type")) {
+    throw new Error(`Cannot load TypeScript configuration ${configPath}: links and special files are not followed.`);
+  }
+  // TypeScript probes parent node_modules folders for package-based extends.
+  // Outside probes see no entries; an unavailable extends remains a TS error.
   // Discovery selects the source files; an empty config input list does not invalidate its options.
   const errors = [
     ...unrecoverable,
@@ -153,12 +155,18 @@ function syntacticFailure(project: Project, sourceFile: SourceFile) {
 export async function parseSourceFiles(
   rootPath: string,
   discoveredFiles: readonly DiscoveredSourceFile[],
+  omittedFiles: readonly SkippedFile[] = [],
 ): Promise<ParsedRepository> {
   const configCache = new Map<string, string | null>();
+  const fileSystem = createRepositoryFileSystem(rootPath, omittedFiles);
   const groups = new Map<string, DiscoveredSourceFile[]>();
 
   for (const file of discoveredFiles) {
-    const configPath = await nearestConfig(path.dirname(file.absolutePath), rootPath, configCache);
+    fileSystem.blocked.clear();
+    const configPath = nearestConfig(path.dirname(file.absolutePath), rootPath, configCache, fileSystem.host);
+    if (fileSystem.blocked.has("symlink-not-followed") || fileSystem.blocked.has("unsupported-file-type")) {
+      throw new Error("Cannot load TypeScript configuration: links and special files are not followed.");
+    }
     const key = configPath ?? "\0default";
     const files = groups.get(key) ?? [];
     files.push(file);
@@ -169,15 +177,17 @@ export async function parseSourceFiles(
   const parseFailures: SkippedFile[] = [];
   for (const [key, files] of [...groups.entries()].sort(([left], [right]) => compareText(left, right))) {
     const configPath = key === "\0default" ? null : key;
-    const { compilerOptions, configDirectory } = loadCompilerOptions(configPath, rootPath);
+    const { compilerOptions, configDirectory } = loadCompilerOptions(configPath, rootPath, fileSystem);
     const project = new Project({
       compilerOptions,
+      useInMemoryFileSystem: true,
       skipFileDependencyResolution: true,
       skipLoadingLibFiles: true,
     });
     const context: ResolutionContext = {
       compilerOptions,
       configDirectory,
+      fileSystem,
       cache: ts.createModuleResolutionCache(
         configDirectory,
         canonicalPath,
@@ -223,21 +233,43 @@ function matchesPathPattern(specifier: string, pattern: string) {
   if (star === -1) return specifier === pattern ? "" : null;
   const prefix = pattern.slice(0, star);
   const suffix = pattern.slice(star + 1);
-  return specifier.startsWith(prefix) && specifier.endsWith(suffix)
+  return specifier.length >= prefix.length + suffix.length
+    && specifier.startsWith(prefix) && specifier.endsWith(suffix)
     ? specifier.slice(prefix.length, specifier.length - suffix.length)
     : null;
 }
 
 function matchingPathEntries(specifier: string, context: ResolutionContext) {
-  const matches: string[] = [];
+  let selected: { substitutions: string[]; wildcard: string; prefixLength: number } | undefined;
   for (const [pattern, substitutions] of Object.entries(context.compilerOptions.paths ?? {})) {
+    if (pattern === specifier) return substitutions;
     const wildcard = matchesPathPattern(specifier, pattern);
-    if (wildcard === null) continue;
-    for (const substitution of substitutions) {
-      matches.push(substitution.replace("*", wildcard));
+    const prefixLength = pattern.indexOf("*");
+    // TypeScript selects one pattern: exact first, then the longest prefix.
+    if (wildcard !== null && (!selected || prefixLength > selected.prefixLength)) {
+      selected = { substitutions, wildcard, prefixLength };
     }
   }
-  return matches;
+  return selected?.substitutions.map(substitution => selected.wildcard
+    ? substitution.replace("*", selected.wildcard) : substitution) ?? [];
+}
+
+function localCandidates(specifier: string, source: ParsedSourceFile) {
+  if (specifier.startsWith(".")) {
+    return [path.resolve(path.dirname(source.discovered.absolutePath), specifier)];
+  }
+  if (path.isAbsolute(specifier)) return [path.resolve(specifier)];
+
+  const { compilerOptions, configDirectory } = source.resolutionContext;
+  const substitutions = matchingPathEntries(specifier, source.resolutionContext);
+  if (substitutions.length > 0) {
+    // Inherited paths are relative to the configuration that declared them.
+    const pathsBasePath = compilerOptions.pathsBasePath;
+    const base = compilerOptions.baseUrl
+      ?? (typeof pathsBasePath === "string" ? pathsBasePath : configDirectory);
+    return substitutions.map(substitution => path.resolve(base, substitution));
+  }
+  return compilerOptions.baseUrl ? [path.resolve(compilerOptions.baseUrl, specifier)] : [];
 }
 
 function isBareSpecifier(specifier: string) {
@@ -258,25 +290,17 @@ function excludedReason(index: ResolutionIndex, repositoryTarget: string) {
   return directory ? `target-in-${directory.reason}-directory` : "resolved-target-not-parsed";
 }
 
-async function classifyResolvedPath(
+function classifyResolvedPath(
   resolvedPath: string,
   index: ResolutionIndex,
   externalLibraryImport: boolean,
-): Promise<ImportResolution> {
-  let resolvedRealPath: string;
-  try {
-    resolvedRealPath = await realpath(resolvedPath);
-  } catch {
-    return externalLibraryImport
-      ? { status: "external", reason: "resolved-external-library" }
-      : { status: "unresolved", reason: "resolved-file-no-longer-exists" };
-  }
-
+): ImportResolution {
+  const resolvedRealPath = path.resolve(resolvedPath);
   const internalTarget = index.parsedPaths.get(canonicalPath(resolvedRealPath));
   if (internalTarget) return { status: "internal", target: internalTarget };
 
   const repositoryTarget = pathInside(index.rootPath, resolvedRealPath);
-  if (!repositoryTarget) return { status: "external", reason: "resolved-outside-root" };
+  if (!repositoryTarget) return { status: "unresolved", reason: "outside-repository-root" };
   if (externalLibraryImport || hasNodeModulesSegment(resolvedRealPath)) {
     return { status: "external", reason: "resolved-external-library" };
   }
@@ -288,35 +312,39 @@ async function classifyResolvedPath(
   };
 }
 
-async function exactLocalCandidates(
+function exactLocalCandidates(
   specifier: string,
   source: ParsedSourceFile,
 ) {
   if (specifier.includes("?") || specifier.includes("#")) return [];
   if (!path.extname(specifier)) return [];
 
-  const candidates: string[] = [];
-  if (specifier.startsWith(".")) {
-    candidates.push(path.resolve(path.dirname(source.discovered.absolutePath), specifier));
-  } else if (path.isAbsolute(specifier)) {
-    candidates.push(path.resolve(specifier));
-  } else {
-    for (const substitution of matchingPathEntries(specifier, source.resolutionContext)) {
-      candidates.push(path.resolve(
-        source.resolutionContext.compilerOptions.baseUrl ?? source.resolutionContext.configDirectory,
-        substitution,
-      ));
-    }
-    if (source.resolutionContext.compilerOptions.baseUrl) {
-      candidates.push(path.resolve(source.resolutionContext.compilerOptions.baseUrl, specifier));
-    }
-  }
-
   const existing: string[] = [];
-  for (const candidate of candidates) {
-    if (await isFile(candidate)) existing.push(candidate);
+  for (const candidate of localCandidates(specifier, source)) {
+    if (source.resolutionContext.fileSystem.host.fileExists(candidate)) existing.push(candidate);
   }
   return existing;
+}
+
+function localFailureReason(specifier: string, source: ParsedSourceFile) {
+  const { compilerOptions, fileSystem } = source.resolutionContext;
+  // Shared cache hits skip host callbacks; package searches probe unrelated
+  // ancestors. Collect fresh evidence only from this import's local candidates.
+  fileSystem.blocked.clear();
+  const diagnosticOptions: ts.CompilerOptions = {
+    ...compilerOptions,
+    paths: undefined,
+    baseUrl: undefined,
+    rootDirs: specifier.startsWith(".") ? compilerOptions.rootDirs : undefined,
+  };
+  for (const candidate of localCandidates(specifier, source)) {
+    fileSystem.host.fileExists(candidate);
+    ts.resolveModuleName(candidate, source.discovered.absolutePath, diagnosticOptions, fileSystem.host);
+  }
+  if (fileSystem.blocked.has("symlink-not-followed")) return "symlink-not-followed";
+  if (fileSystem.blocked.has("unsupported-file-type")) return "target-unsupported-file-type";
+  return fileSystem.blocked.has("outside-repository-root")
+    ? "outside-repository-root" : "typescript-could-not-resolve-local-specifier";
 }
 
 export function createResolutionIndex(
@@ -342,11 +370,13 @@ export async function resolveImport(
   specifier: string,
   index: ResolutionIndex,
 ): Promise<ImportResolution> {
+  const { fileSystem } = source.resolutionContext;
+  fileSystem.blocked.clear();
   const result = ts.resolveModuleName(
     specifier,
     source.discovered.absolutePath,
     source.resolutionContext.compilerOptions,
-    ts.sys,
+    fileSystem.host,
     source.resolutionContext.cache,
   );
   if (result.resolvedModule) {
@@ -357,7 +387,7 @@ export async function resolveImport(
     );
   }
 
-  for (const candidate of await exactLocalCandidates(specifier, source)) {
+  for (const candidate of exactLocalCandidates(specifier, source)) {
     return classifyResolvedPath(candidate, index, false);
   }
 
@@ -369,5 +399,5 @@ export async function resolveImport(
     return { status: "external", reason: "package-specifier" };
   }
 
-  return { status: "unresolved", reason: "typescript-could-not-resolve-local-specifier" };
+  return { status: "unresolved", reason: localFailureReason(specifier, source) };
 }
