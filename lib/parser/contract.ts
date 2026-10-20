@@ -1,3 +1,5 @@
+import type { FileRole, Framework } from "../frameworks/taxonomy";
+
 export const IMPORT_KINDS = ["import", "re-export", "dynamic-import"] as const;
 
 export type ImportKind = (typeof IMPORT_KINDS)[number];
@@ -100,8 +102,23 @@ export interface AnalysisCoverage {
   imports: ImportCoverage;
 }
 
+export interface FileRoleRecord {
+  file: string;
+  role: FileRole;
+}
+
+export interface HttpRoute {
+  file: string;
+  method: string;
+  path: string;
+  line: number;
+}
+
 export interface AnalysisResult {
   schemaVersion: 1;
+  framework: Framework;
+  fileRoles: FileRoleRecord[];
+  routes: HttpRoute[];
   files: FileNode[];
   edges: GraphEdge[];
   imports: ImportRecord[];

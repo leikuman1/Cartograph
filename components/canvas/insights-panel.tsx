@@ -1,20 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import type { FileNode } from "@/lib/parser/contract";
+import type { FileNode, FileRoleRecord } from "@/lib/parser/contract";
 import type { Selection } from "@/lib/canvas/graph";
 import { INSIGHT_DESCRIPTIONS, insightCount, type Insights } from "@/lib/canvas/insights";
 import CategoryMark from "./category-mark";
 
 type InsightsPanelProps = {
   insights: Insights;
+  fileRoles: readonly FileRoleRecord[];
   hoveredFiles: ReadonlySet<string>;
   onSelect: (path: string) => void;
   onHover: (selection: Selection) => void;
 };
 
-function FileEntries({ files, suffix, hoveredFiles, onSelect, onHover }: {
+function FileEntries({ files, fileRoles, suffix, hoveredFiles, onSelect, onHover }: {
   files: readonly FileNode[];
+  fileRoles: readonly FileRoleRecord[];
   suffix?: (file: FileNode) => string;
   hoveredFiles: ReadonlySet<string>;
   onSelect: (path: string) => void;
@@ -24,16 +26,16 @@ function FileEntries({ files, suffix, hoveredFiles, onSelect, onHover }: {
     <button type="button" className={`detail-file-link ${hoveredFiles.has(file.path) ? "is-hovered" : ""}`}
       onClick={() => onSelect(file.path)} onMouseEnter={() => onHover({ kind: "file", path: file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) onHover(null); }}
       onFocus={() => onHover({ kind: "file", path: file.path })} onBlur={() => onHover(null)}>
-      <CategoryMark path={file.path} /><span className="detail-path">{file.path}</span>
+      <CategoryMark path={file.path} fileRoles={fileRoles} /><span className="detail-path">{file.path}</span>
       {suffix && <span className="detail-count">{suffix(file)}</span>}
     </button>
   </li>)}</ul>;
 }
 
-export default function InsightsPanel({ insights, hoveredFiles, onSelect, onHover }: InsightsPanelProps) {
+export default function InsightsPanel({ insights, fileRoles, hoveredFiles, onSelect, onHover }: InsightsPanelProps) {
   const [open, setOpen] = useState(false);
   const total = insightCount(insights);
-  const listProps = { hoveredFiles, onSelect, onHover };
+  const listProps = { fileRoles, hoveredFiles, onSelect, onHover };
   return <section className="insights-panel" aria-label="Insights">
     <button type="button" className="insights-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span aria-hidden="true">{open ? "−" : "+"}</span>Insights<span className="detail-count">{total}</span>

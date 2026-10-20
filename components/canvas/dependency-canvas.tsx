@@ -5,16 +5,17 @@ import {
   BaseEdge, Controls, Handle, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, useStore, useUpdateNodeInternals, type Edge, type EdgeProps, type Node, type NodeProps,
 } from "@xyflow/react";
-import type { AnalysisResult, FileNode } from "@/lib/parser/contract";
+import type { AnalysisResult, FileNode, FileRoleRecord } from "@/lib/parser/contract";
+import { categoriesForFramework, categoryForFile, FRAMEWORK_LABELS, type CategoryDefinition } from "@/lib/frameworks/taxonomy";
 import {
-  categories, fileCategory, foldFolders, FILE_ROW_HEIGHT, PANEL_HEADER_HEIGHT,
+  foldFolders, FILE_ROW_HEIGHT, PANEL_HEADER_HEIGHT,
   ROWS_PER_PANEL, panelFiles, selectionContext, shortestUniqueLabels, visibleConnections,
-  type FileCategory, type FolderGroup, type Selection, type VisibleConnection,
+  type FolderGroup, type Selection, type VisibleConnection,
 } from "@/lib/canvas/graph";
-import { repositoryDetails } from "@/lib/canvas/details";
+import { githubSourceUrl, repositoryDetails } from "@/lib/canvas/details";
 import { buildInsights, entryExclusionCounts } from "@/lib/canvas/insights";
 import { fitViewport, layoutFolders } from "@/lib/canvas/layout";
-import CategoryMark from "./category-mark";
+import CategoryMark, { CategorySymbol } from "./category-mark";
 import DetailPanel from "./detail-panel";
 import { routeBounds, routeConnections, type ConnectionRoute } from "@/lib/canvas/routing";
 import "@xyflow/react/dist/style.css";
@@ -33,7 +34,8 @@ type FolderData = {
   related: ReadonlySet<string>;
   hovered: boolean;
   hoveredFiles: ReadonlySet<string>;
-  category: FileCategory | null;
+  category: CategoryDefinition | null;
+  fileRoles: readonly FileRoleRecord[];
   matchingFiles: ReadonlySet<string> | null;
   onToggle: (id: string) => void;
   onSelect: (path: string) => void;
@@ -42,6 +44,12 @@ type FolderData = {
 };
 type FolderNode = Node<FolderData, "folder">;
 type ImportEdge = Edge<{ connection: VisibleConnection; route: ConnectionRoute; highlighted: boolean }, "import">;
+type CanvasProps = {
+  analysis: AnalysisResult;
+  repositoryName: string;
+  repositoryUrl: string | null;
+  commitSha: string | null;
+};
 
 function Ports({ top, suffix = "" }: { top: number | string; suffix?: string }) {
   return <>
@@ -68,7 +76,7 @@ function Folder({ data }: NodeProps<FolderNode>) {
       onMouseEnter={() => data.onHover({ kind: "folder", id: group.id })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) data.onHover(null); }}
       onFocus={() => data.onHover({ kind: "folder", id: group.id })} onBlur={() => data.onHover(null)}>
       <span className="folder-name"><span aria-hidden="true" className="folder-chevron">{open ? "−" : "+"}</span>{data.label}</span>
-      <span className="folder-stats"><span className={data.category ? "category-match" : undefined}>{data.category ? `${matching} ${categories.find(category => category.id === data.category)?.label.toLowerCase()} of ${group.files.length}` : `${group.files.length} files`}</span><span title="Distinct files outside this folder that import it">in {group.fanIn}</span><span title="Distinct files outside this folder that it imports">out {group.fanOut}</span></span>
+      <span className="folder-stats"><span className={data.category ? "category-match" : undefined}>{data.category ? `${matching} ${data.category.label.toLowerCase()} of ${group.files.length}` : `${group.files.length} files`}</span><span title="Distinct files outside this folder that import it">in {group.fanIn}</span><span title="Distinct files outside this folder that it imports">out {group.fanOut}</span></span>
     </button>
     {open && <>
       <div className="folder-rows">
@@ -82,7 +90,7 @@ function Folder({ data }: NodeProps<FolderNode>) {
             <button type="button" className={`file-row nodrag ${isSelected ? "is-selected" : ""} ${hovered ? "is-hovered" : ""}`} data-file-path={file.path} onClick={() => data.onSelect(file.path)} aria-pressed={isSelected} title={`${file.path} · ${file.fanIn} dependents · ${file.fanOut} dependencies`}
               onMouseEnter={() => data.onHover({ kind: "file", path: file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) data.onHover(null); }}
               onFocus={() => data.onHover({ kind: "file", path: file.path })} onBlur={() => data.onHover(null)}>
-              <CategoryMark path={file.path} />
+              <CategoryMark path={file.path} fileRoles={data.fileRoles} />
               <span className="file-name">{data.labels.get(file.path) ?? file.path}</span>
               <span className="file-fans"><span title={`${file.fanIn} files import this file`}>in {file.fanIn}</span> <span title={`This file imports ${file.fanOut} files`}>out {file.fanOut}</span></span>
             </button>
@@ -154,25 +162,46 @@ function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect:
     <tbody>{analysis.files.map(file => <tr key={file.path}>
       {/* Keyboard activation reports detail 0; only then does the unmounted table need to hand focus to the map. */}
       <td><button type="button" onClick={event => onSelect(file.path, event.detail === 0)} className="table-file">{file.path}</button></td>
-      <td><CategoryMark path={file.path} /> {categories.find(category => category.id === fileCategory(file.path))?.label}</td>
+      <td><CategoryMark path={file.path} fileRoles={analysis.fileRoles} /> {categoryForFile(file.path, analysis.fileRoles).label}</td>
       <td>{file.fanIn}</td><td>{file.fanOut}</td>
       <td>{file.fanOut > 0 ? <details><summary>{file.fanOut} dependencies</summary>{imports.get(file.path)?.map(target => <p key={target} className="font-mono">{target}</p>)}</details> : "—"}</td>
     </tr>)}</tbody>
   </table></div>;
 }
 
-function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; repositoryName: string }) {
+function RouteTable({ analysis, repositoryUrl, commitSha, onSelect }: Pick<CanvasProps, "analysis" | "repositoryUrl" | "commitSha"> & { onSelect: (path: string, focusInMap?: boolean) => void }) {
+  return <div className="canvas-table-scroll">
+    <p className="routes-note">Only routes whose HTTP method and full path were recovered are shown.</p>
+    <table className="canvas-table routes-table">
+      <caption className="sr-only">Recovered routes and their source code at the analyzed commit</caption>
+      <thead><tr><th scope="col">Method</th><th scope="col">Path</th><th scope="col">Source</th></tr></thead>
+      <tbody>{analysis.routes.length === 0 ? <tr><td colSpan={3} className="routes-empty">No routes were fully recovered. Only routes with a known HTTP method and complete path are listed.</td></tr> : analysis.routes.map(route => {
+        const sourceUrl = githubSourceUrl(repositoryUrl, commitSha, route.file, route.line);
+        return <tr key={JSON.stringify([route.file, route.line, route.method, route.path])}>
+          <td><code>{route.method}</code></td>
+          <td><button type="button" className="table-file" onClick={event => onSelect(route.file, event.detail === 0)} title={`Reveal ${route.file} in the map`}>{route.path}</button></td>
+          <td><button type="button" className="table-file" onClick={event => onSelect(route.file, event.detail === 0)} title="Reveal source file in the map">{route.file}:{route.line}</button>
+            {sourceUrl ? <a className="route-source-link" href={sourceUrl} target="_blank" rel="noreferrer" title={`View ${route.file}:${route.line} at commit ${commitSha}`}>View code ↗</a> : <span className="route-source-unavailable">Source link unavailable</span>}
+          </td>
+        </tr>;
+      })}</tbody>
+    </table>
+  </div>;
+}
+
+function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasProps) {
+  const categories = categoriesForFramework(analysis.framework);
   const folded = useMemo(() => foldFolders(analysis.files, analysis.edges), [analysis]);
-  const details = useMemo(() => repositoryDetails(analysis.files, analysis.edges), [analysis]);
-  const insights = useMemo(() => buildInsights(analysis.files, analysis.edges), [analysis]);
-  const entryExclusions = useMemo(() => entryExclusionCounts(analysis.files.filter(file => file.fanIn === 0)), [analysis.files]);
+  const details = useMemo(() => repositoryDetails(analysis.files, analysis.edges, analysis.fileRoles), [analysis]);
+  const insights = useMemo(() => buildInsights(analysis.files, analysis.edges, analysis.framework, analysis.fileRoles), [analysis]);
+  const entryExclusions = useMemo(() => entryExclusionCounts(analysis.files.filter(file => file.fanIn === 0), analysis.framework, analysis.fileRoles), [analysis.files, analysis.framework, analysis.fileRoles]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [pages, setPages] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [selection, setSelection] = useState<Selection>(null);
   const [hover, setHover] = useState<Selection>(null);
-  const [category, setCategory] = useState<FileCategory | null>(null);
-  const matchingFiles = useMemo(() => category ? new Set(analysis.files.filter(file => fileCategory(file.path) === category).map(file => file.path)) : null, [analysis.files, category]);
-  const [view, setView] = useState<"map" | "table">("map");
+  const [category, setCategory] = useState<CategoryDefinition | null>(null);
+  const matchingFiles = useMemo(() => category ? new Set(analysis.files.filter(file => categoryForFile(file.path, analysis.fileRoles).id === category.id).map(file => file.path)) : null, [analysis.files, analysis.fileRoles, category]);
+  const [view, setView] = useState<"map" | "table" | "routes">("map");
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [ready, setReady] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -243,11 +272,11 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
     setHover(null);
     selectFile(path);
     setView("map");
-  }, [folded, selectFile]);
+  }, [folded, selectFile, setHover, setView]);
   const clearSelection = useCallback(() => {
     setSelection(null);
     setHover(null);
-  }, []);
+  }, [setHover]);
   const changePage = useCallback((id: string, page: number) => {
     needsFit.current = true;
     setPages(current => new Map(current).set(id, page));
@@ -263,7 +292,7 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
       style: { width: position.width, height: position.height, pointerEvents: "all" },
       data: { group, label: position.label, labels, open: expanded.has(group.id), page, rows: panelFiles(group, page),
         dimmed: (selection !== null && !context.visibleGroups.has(group.id)) || (matchingFiles !== null && !group.files.some(file => matchingFiles.has(file.path))),
-        selection, related: context.visibleFiles, hovered: hoveredFolder === group.id, hoveredFiles, category, matchingFiles,
+        selection, related: context.visibleFiles, hovered: hoveredFolder === group.id, hoveredFiles, category, fileRoles: analysis.fileRoles, matchingFiles,
         onToggle: toggle, onSelect: selectFile, onPage: changePage, onHover: setHover },
     };
   });
@@ -287,12 +316,12 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
     <div className="canvas-columns">
     <aside className="category-sidebar" aria-label="File categories">
       <h2>File kinds</h2>
-      {categories.map(item => <button key={item.id} type="button" className="category-item" aria-pressed={category === item.id}
-        title={category === item.id ? `Stop filtering by ${item.label}` : `Dim files that are not ${item.label}`}
-        onClick={() => setCategory(category === item.id ? null : item.id)}>
-        <span className={`category-mark category-${item.id}`}>{item.code}</span><span>{item.label}</span><span className="category-count">{categoryCounts[item.id]}</span>
+      {categories.map(item => <button key={item.id} type="button" className="category-item" aria-pressed={category?.id === item.id}
+        title={category?.id === item.id ? `Stop filtering by ${item.label}` : `Dim files that are not ${item.label}: ${item.description}`}
+        onClick={() => setCategory(category?.id === item.id ? null : item)}>
+        <CategorySymbol category={item} /><span>{item.label}</span><span className="category-count">{categoryCounts.get(item.id) ?? 0}</span>
       </button>)}
-      <p className="sidebar-filter-note">{category ? `Dimming files that are not ${categories.find(item => item.id === category)?.label.toLowerCase()}. Click again to clear.` : "Click a kind to dim the rest."}</p>
+      <p className="sidebar-filter-note">{category ? `Dimming files that are not ${category.label.toLowerCase()}. Click again to clear.` : "Click a kind to dim the rest."}</p>
       <div className="sidebar-section"><h2>Reading the map</h2><p>Height = dependents</p><p>Width = label length</p><p>In / out = distinct files</p><p>Arrow → dependency</p>
         <p><span className="direction-mark incoming" /> Incoming</p><p><span className="direction-mark outgoing" /> Outgoing</p>
       </div>
@@ -305,9 +334,9 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
     </aside>
     <section className="map-column" aria-label="Dependency map">
       <div className="map-toolbar">
-        <div className="view-switch" role="group" aria-label="View"><button type="button" aria-pressed={view === "map"} onClick={() => { needsFit.current = true; setView("map"); }}>Map</button><button type="button" aria-pressed={view === "table"} onClick={() => setView("table")}>Files</button></div>
-        <span>{folded.groups.length} folders · threshold {folded.threshold}</span>
-        <button type="button" className="control map-fit" onClick={() => { void instance.setViewport(fitViewport(bounds, dimensions.width, dimensions.height, 1), { duration: 0 }); }}>Fit map</button>
+        <div className="view-switch" role="group" aria-label="View"><button type="button" aria-pressed={view === "map"} onClick={() => { needsFit.current = true; setView("map"); }}>Map</button><button type="button" aria-pressed={view === "table"} onClick={() => setView("table")}>Files</button><button type="button" aria-pressed={view === "routes"} onClick={() => setView("routes")}>Routes</button></div>
+        <span>{FRAMEWORK_LABELS[analysis.framework]} · {view === "routes" ? `${analysis.routes.length} routes` : `${folded.groups.length} folders · threshold ${folded.threshold}`}</span>
+        <button type="button" className="control map-fit" disabled={view !== "map"} onClick={() => { void instance.setViewport(fitViewport(bounds, dimensions.width, dimensions.height, 1), { duration: 0 }); }}>Fit map</button>
       </div>
       <div className="map-frame" ref={frame}>
         <div className="flow-layer" style={{ visibility: view === "map" ? "visible" : "hidden" }} aria-hidden={view !== "map"}>
@@ -321,10 +350,11 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
           </ReactFlow>
         </div>
         {view === "table" && <FileTable analysis={analysis} onSelect={revealFile} />}
+        {view === "routes" && <RouteTable analysis={analysis} repositoryUrl={repositoryUrl} commitSha={commitSha} onSelect={revealFile} />}
       </div>
       <footer className="map-status"><span title={selectedLabel ?? undefined}>{selectedLabel ?? "Click a folder to expand · select a file to trace imports"}</span>{selection && <button type="button" onClick={clearSelection}>Clear selection</button>}<span>{Math.round(zoom * 100)}%</span></footer>
     </section>
-    <DetailPanel repositoryName={repositoryName} details={details} files={analysis.files} edges={analysis.edges}
+    <DetailPanel repositoryName={repositoryName} framework={analysis.framework} fileRoles={analysis.fileRoles} routeCount={analysis.routes.length} details={details} files={analysis.files} edges={analysis.edges}
       edgeCount={analysis.edges.length} selection={selection} entryExclusions={entryExclusions} insights={insights}
       group={selection?.kind === "folder" ? folded.groups.find(group => group.id === selection.id) : undefined}
       hoveredFiles={hoveredFiles} hoveredFolder={hoveredFolder ?? null} onSelect={revealFile} onHover={setHover} onClear={clearSelection} />
@@ -332,8 +362,8 @@ function Canvas({ analysis, repositoryName }: { analysis: AnalysisResult; reposi
   </div>;
 }
 
-export default function DependencyCanvas({ analysis, repositoryName }: { analysis: AnalysisResult; repositoryName: string }) {
+export default function DependencyCanvas(props: CanvasProps) {
   return <div className="analysis-shell">
-    <ReactFlowProvider><Canvas analysis={analysis} repositoryName={repositoryName} /></ReactFlowProvider>
+    <ReactFlowProvider><Canvas {...props} /></ReactFlowProvider>
   </div>;
 }

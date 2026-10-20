@@ -1,4 +1,5 @@
 import path from "node:path";
+import { analyzeFramework } from "../frameworks";
 import type { RepositoryAdapter } from "./adapter";
 import { fallbackAdapter } from "./adapter";
 import type {
@@ -144,8 +145,15 @@ export async function analyzeDiscoveredRepository(
   imports.sort(compareImports);
 
   const graph = buildGraph(metadata, internalImports);
+  const framework = analyzeFramework({
+    rootPath: discovered.rootPath,
+    sourceFiles: parsed.sourceFiles,
+    packageDirectories: discovered.packageDirectories,
+    skippedFiles,
+  });
   return validateAnalysisResult({
     schemaVersion: 1,
+    ...framework,
     files: graph.files,
     edges: graph.edges,
     imports,

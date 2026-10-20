@@ -1,5 +1,6 @@
-import type { FileNode, GraphEdge } from "../parser/contract";
-import { compareText, fileCategory } from "./graph";
+import type { FileNode, FileRoleRecord, GraphEdge } from "../parser/contract";
+import { categoryForFile, type FileCategory } from "../frameworks/taxonomy";
+import { compareText } from "./graph";
 
 export interface FileDetails {
   file: FileNode;
@@ -7,13 +8,16 @@ export interface FileDetails {
   dependents: FileNode[];
 }
 
-export function countFileCategories(files: readonly FileNode[]) {
-  const counts = { source: 0, test: 0, declaration: 0 };
-  for (const file of files) counts[fileCategory(file.path)] += 1;
+export function countFileCategories(files: readonly FileNode[], fileRoles: readonly FileRoleRecord[]) {
+  const counts = new Map<FileCategory, number>();
+  for (const file of files) {
+    const category = categoryForFile(file.path, fileRoles).id;
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
   return counts;
 }
 
-export function repositoryDetails(files: readonly FileNode[], edges: readonly GraphEdge[]) {
+export function repositoryDetails(files: readonly FileNode[], edges: readonly GraphEdge[], fileRoles: readonly FileRoleRecord[]) {
   const byPath = new Map<string, FileDetails>(files.map(file => [file.path, { file, dependencies: [], dependents: [] }]));
   const dependencies = new Map(files.map(file => [file.path, new Set<string>()]));
   const dependents = new Map(files.map(file => [file.path, new Set<string>()]));
@@ -39,10 +43,27 @@ export function repositoryDetails(files: readonly FileNode[], edges: readonly Gr
   const mostImported = ordered.filter(details => details.dependents.length > 0)
     .sort((a, b) => b.dependents.length - a.dependents.length || compareText(a.file.path, b.file.path));
   const entryPoints = ordered.filter(details => details.dependents.length === 0);
-  return { byPath, mostImported, entryPoints, categoryCounts: countFileCategories(files) };
+  return { byPath, mostImported, entryPoints, categoryCounts: countFileCategories(files, fileRoles) };
 }
 
 export type RepositoryDetails = ReturnType<typeof repositoryDetails>;
+
+export function githubSourceUrl(repositoryUrl: string | null, commitSha: string | null, file: string, line: number): string | null {
+  if (!repositoryUrl || !commitSha || !/^[a-f0-9]{40}$/i.test(commitSha) || !Number.isSafeInteger(line) || line < 1) return null;
+  let repository: URL;
+  try {
+    repository = new URL(repositoryUrl);
+  } catch {
+    return null;
+  }
+  if (repository.protocol !== "https:" || repository.hostname !== "github.com") return null;
+  const path = repository.pathname.replace(/\/$/, "").replace(/\.git$/, "");
+  if (!/^\/[^/]+\/[^/]+$/.test(path)) return null;
+  const segments = file.split("/");
+  if (segments.some(segment => !segment || segment === "." || segment === ".." || segment.includes("\\"))) return null;
+  const source = segments.map(segment => encodeURIComponent(segment)).join("/");
+  return `https://github.com${path}/blob/${commitSha}/${source}#L${line}`;
+}
 
 export interface ImportedFile extends FileNode {
   importerCount: number;

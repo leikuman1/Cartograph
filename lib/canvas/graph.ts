@@ -113,20 +113,6 @@ export function shortestUniqueLabels(paths: readonly string[]) {
   return labels;
 }
 
-export const categories = [
-  { id: "source", label: "Source", code: "S" },
-  { id: "test", label: "Tests", code: "T" },
-  { id: "declaration", label: "Declarations", code: "D" },
-] as const;
-
-export type FileCategory = (typeof categories)[number]["id"];
-
-export function fileCategory(path: string): FileCategory {
-  if (/\.d\.[cm]?ts$/.test(path)) return "declaration";
-  if (/(^|\/)(__tests__|tests?|runtime-tests)(\/|$)|\.(test|spec)\.[^.]+$/.test(path)) return "test";
-  return "source";
-}
-
 export type Selection = { kind: "folder"; id: string } | { kind: "file"; path: string } | null;
 
 export function selectionContext(folded: FoldedGraph, edges: readonly GraphEdge[], selection: Selection) {

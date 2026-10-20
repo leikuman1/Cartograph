@@ -1,5 +1,7 @@
-import type { FileNode, GraphEdge } from "../parser/contract";
-import { compareText, fileCategory } from "./graph";
+import type { FileNode, FileRoleRecord, GraphEdge } from "../parser/contract";
+import { genericCategoryForPath, type Framework } from "../frameworks/taxonomy";
+import { isFrameworkEntry } from "../frameworks/entry-points";
+import { compareText } from "./graph";
 
 export const TRAVERSAL_DEPTH = 2;
 export const UNUSUALLY_IMPORTED = 10;
@@ -66,9 +68,6 @@ export function traverse(
 
 export type EntryReason = "test" | "config" | "framework-entry" | "ambient-declaration";
 
-// Route filenames are entry conventions only within a routing directory.
-const ROUTE_ENTRY = /^(src\/)?(app|pages)\/(.*\/)?(page|route|layout|template|default|loading|error|not-found)\.[cm]?[jt]sx?$/;
-const ROOT_ENTRY = /^(src\/)?(middleware|instrumentation)\.[cm]?[jt]sx?$/;
 const CONFIG_FILE = /(^|\/)[^/]*\.config\.[cm]?[jt]sx?$/;
 // Tool config often lives in a dot directory, e.g. .vitest.config/setup.ts.
 const CONFIG_DIRECTORY = /(^|\/)\.[^/]*config[^/]*(\/|$)/;
@@ -76,19 +75,19 @@ const AMBIENT_DECLARATION = /\.[cm]?d\.[cm]?ts$/;
 
 // These files are reached by a framework or a tool rather than by an import, so
 // a missing importer says nothing about whether the code is used.
-export function entryReason(path: string): EntryReason | null {
+export function entryReason(path: string, framework: Framework, fileRoles: readonly FileRoleRecord[]): EntryReason | null {
   if (AMBIENT_DECLARATION.test(path)) return "ambient-declaration";
   // Config before test: a vitest config inside a runtime-tests directory is still a tool entry point.
   if (CONFIG_FILE.test(path) || CONFIG_DIRECTORY.test(path)) return "config";
-  if (ROUTE_ENTRY.test(path) || ROOT_ENTRY.test(path)) return "framework-entry";
-  if (fileCategory(path) === "test") return "test";
+  if (isFrameworkEntry(framework, path, fileRoles)) return "framework-entry";
+  if (genericCategoryForPath(path).id === "test") return "test";
   return null;
 }
 
-export function entryExclusionCounts(files: readonly FileNode[]) {
+export function entryExclusionCounts(files: readonly FileNode[], framework: Framework, fileRoles: readonly FileRoleRecord[]) {
   const counts: Record<EntryReason, number> = { test: 0, config: 0, "framework-entry": 0, "ambient-declaration": 0 };
   for (const file of files) {
-    const reason = entryReason(file.path);
+    const reason = entryReason(file.path, framework, fileRoles);
     if (reason) counts[reason] += 1;
   }
   return counts;
@@ -200,7 +199,7 @@ export const INSIGHT_DESCRIPTIONS = {
 
 export const INSIGHT_ORDER = ["unimported", "widelyImported", "cycles", "longFiles"] as const;
 
-export function buildInsights(files: readonly FileNode[], edges: readonly GraphEdge[]): Insights {
+export function buildInsights(files: readonly FileNode[], edges: readonly GraphEdge[], framework: Framework, fileRoles: readonly FileRoleRecord[]): Insights {
   const paths = files.map(file => file.path).sort(compareText);
   const next = sortedAdjacency(paths, edges);
   const components = stronglyConnected(paths, next);
@@ -211,7 +210,7 @@ export function buildInsights(files: readonly FileNode[], edges: readonly GraphE
   }
   cycles.sort((left, right) => compareText(left[0], right[0]));
   return {
-    unimported: files.filter(file => file.fanIn === 0 && entryReason(file.path) === null)
+    unimported: files.filter(file => file.fanIn === 0 && entryReason(file.path, framework, fileRoles) === null)
       .sort((left, right) => compareText(left.path, right.path)),
     widelyImported: files.filter(file => file.fanIn >= UNUSUALLY_IMPORTED)
       .sort((left, right) => right.fanIn - left.fanIn || compareText(left.path, right.path)),

@@ -185,9 +185,10 @@ visibility. The dashboard and detail page subscribe with Clerk authentication;
 a snapshot after subscription closes any missed-event gap. There is no database
 polling. A local clock marks stale rows without reading the database.
 
-The map reads files, resolved edges, imports, and coverage from stored rows in
-one consistent database snapshot. File coverage and local import resolution are
-separate percentages with both counts visible even when the banner is collapsed.
+The map reads files, resolved edges, imports, coverage, framework roles, and
+routes from stored rows in one consistent database snapshot. File coverage and
+local import resolution are separate percentages with both counts visible even
+when the banner is collapsed.
 Skipped files, excluded directories, and unresolved imports keep the map labeled
 incomplete. The previous committed parser output and `/preview` route are removed.
 
@@ -197,7 +198,24 @@ Expand folders into paginated file rows, select a file to highlight its imports
 and importers, or inspect the Files table. The detail panel shows direct
 connections and two-step traversals; category filtering and graph insights use
 the same stored parser output. Escape or a background click clears selection.
-Framework roles and route extraction have not run in this phase.
+Framework detection runs in fixed order: Next.js, NestJS, then React. The sidebar
+uses each framework's concrete roles in a fixed reading order; unmatched files
+keep Source, Tests, or Declarations. Unmatched repositories render normally with
+an empty Routes table. Older analyses need an explicit rerun to populate these
+new facts.
+
+The Routes table shows only recoverable HTTP methods and full path patterns.
+A route can reveal its file in the map or open the source at the analyzed commit
+and line on GitHub. Next.js page conventions and App Router HTTP exports, and
+NestJS controller/method decorators with a recoverable bootstrap, supply these
+facts. Pages Router API handlers retain their role but produce no route rows,
+since a method check in a function cannot prove which methods it serves.
+Dynamic configuration, unknown prefixes, and unsupported routing syntax also
+produce no routes. React has file roles without an inferred routing system.
+Framework adapters reuse parsed syntax; no repository code is executed.
+
+Apply the phase 8 database migration with `pnpm db:migrate` before analyzing new
+repositories, then run `pnpm db:verify` to check metadata storage and RLS.
 
 The parser also remains usable without the app:
 
@@ -219,7 +237,8 @@ pnpm db:verify
 pnpm db:advisors
 ```
 
-Run the browser acceptance check in `docs/specs/phrase-07.md` manually, including
-watching progress from a second tab. The workspace derives its organization
-from the server session, and switching teams refreshes that state. Theme choices
+Run the browser acceptance check in `docs/specs/phrase-08.md` manually. The phase
+7 progress checks, including watching progress from a second tab, remain manual.
+The workspace derives its organization from the server session, and switching
+teams refreshes that state. Theme choices
 are saved in local storage; system mode follows OS changes.
