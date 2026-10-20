@@ -21,7 +21,7 @@ as $$
         'fanOut', f.fan_out
       ) order by f.path collate "C")
       from public.files f
-      where f.analysis_id = a.id
+      where f.organization_id = a.organization_id and f.analysis_id = a.id
     ), '[]'::jsonb),
     'edges', coalesce((
       select jsonb_agg(jsonb_build_object(
@@ -34,7 +34,7 @@ as $$
         and source.analysis_id = e.analysis_id and source.id = e.source_file_id
       join public.files target on target.organization_id = e.organization_id
         and target.analysis_id = e.analysis_id and target.id = e.target_file_id
-      where e.analysis_id = a.id
+      where e.organization_id = a.organization_id and e.analysis_id = a.id
     ), '[]'::jsonb),
     'imports', a.import_records,
     'coverage', a.coverage

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startAnalysis, type AnalysisActionState } from "./actions";
 
@@ -8,6 +8,7 @@ const initialState: AnalysisActionState = { error: null, analysisId: null };
 
 export default function AnalysisForm({ organizationId }: { organizationId: string }) {
   const router = useRouter();
+  const [repositoryUrl, setRepositoryUrl] = useState("");
   const [state, action, pending] = useActionState(
     startAnalysis.bind(null, organizationId),
     initialState,
@@ -25,6 +26,8 @@ export default function AnalysisForm({ organizationId }: { organizationId: strin
       <input
         id="repository-url"
         name="repositoryUrl"
+        value={repositoryUrl}
+        onChange={event => setRepositoryUrl(event.target.value)}
         type="url"
         inputMode="url"
         autoComplete="off"

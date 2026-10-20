@@ -12,6 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ts } from "ts-morph";
+import { createRepositoryFileSystem } from "./filesystem";
 import {
   analyzeRepository,
   readAnalysisResult,
@@ -217,7 +219,7 @@ test("renaming one imported file reports exactly one unresolved import", async (
   }
 });
 
-test("classifies a resolved file outside the requested root as external", async () => {
+test("refuses an import outside the requested root without resolving its target", async () => {
   const parent = await temporaryRepository();
   const root = path.join(parent, "repository");
   try {
@@ -227,10 +229,120 @@ test("classifies a resolved file outside the requested root as external", async 
     });
     const result = await analyzeRepository(root);
     assert.deepEqual(importRecord(result, "entry.ts", "../shared", "re-export").resolution, {
-      status: "external",
-      reason: "resolved-outside-root",
+      status: "unresolved",
+      reason: "outside-repository-root",
     });
     assert.equal(result.edges.length, 0);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("filesystem callbacks refuse outside paths and symlink targets before reading", async t => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    await writeFixture(parent, {
+      "outside/secret.json": "external configuration",
+      "repository/local.json": "local configuration",
+    });
+    await symlink(path.join(parent, "outside"), path.join(root, "linked"), "junction");
+    const read = t.mock.method(ts.sys, "readFile", (filePath: string) => {
+      assert.equal(filePath, path.join(root, "local.json"));
+      return "local configuration";
+    });
+    const { host, blocked } = createRepositoryFileSystem(root);
+    assert.equal(host.readFile(path.join(parent, "outside", "secret.json")), undefined);
+    assert.equal(host.fileExists(path.join(parent, "outside", "secret.json")), false);
+    assert.equal(host.directoryExists?.(parent), false);
+    assert.deepEqual(host.getDirectories?.(parent), []);
+    assert.equal(host.readFile(path.join(root, "linked", "secret.json")), undefined);
+    assert.equal(host.fileExists(path.join(root, "linked", "secret.json")), false);
+    assert.deepEqual(host.getDirectories?.(root), []);
+    assert.equal(read.mock.callCount(), 0);
+    assert.ok(blocked.has("outside-repository-root"));
+    assert.ok(blocked.has("symlink-not-followed"));
+    assert.equal(host.readFile(path.join(root, "local.json")), "local configuration");
+    assert.equal(read.mock.callCount(), 1);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("configuration extends cannot read outside the repository or follow a symlink", async t => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    await writeFixture(parent, {
+      "external/base.json": '{"compilerOptions":{"strict":true}}',
+      "repository/entry.ts": "export const value = 1;\n",
+    });
+    await symlink(path.join(parent, "external"), path.join(root, "linked"), "junction");
+    const nativeRead = ts.sys.readFile;
+    t.mock.method(ts.sys, "readFile", (filePath: string) => {
+      assert.equal(path.relative(root, filePath).startsWith(".."), false, filePath);
+      assert.equal(filePath.includes(`${path.sep}linked${path.sep}`), false, filePath);
+      return nativeRead(filePath);
+    });
+    for (const config of [
+      { extends: "../external/base.json" },
+      { extends: "./linked/base.json" },
+    ]) {
+      await writeFixture(root, { "tsconfig.json": JSON.stringify(config) });
+      await assert.rejects(analyzeRepository(root), /Cannot load TypeScript configuration/);
+    }
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("configuration globs never enumerate directories and internal extends still resolve", async t => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    await writeFixture(parent, {
+      "external/hidden.ts": "export const hidden = 1;\n",
+      "repository/config/base.json": JSON.stringify({ compilerOptions: {
+        module: "ESNext", moduleResolution: "Bundler", paths: { "@/*": ["../src/*"] },
+      } }),
+      "repository/tsconfig.json": JSON.stringify({ extends: "./config/base.json", include: ["../**/*"] }),
+      "repository/src/entry.ts": 'export { value } from "@/target";\n',
+      "repository/src/target.ts": "export const value = 1;\n",
+    });
+    t.mock.method(ts.sys, "readDirectory", () => { throw new Error("Configuration must not enumerate files"); });
+    const result = await analyzeRepository(root);
+    assert.equal(result.files.length, 2);
+    assert.deepEqual(result.edges, [{ source: "src/entry.ts", target: "src/target.ts", kinds: ["re-export"] }]);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("module resolution refuses outside aliases and symlink imports without reading their targets", async t => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    await writeFixture(parent, {
+      "external/value.ts": "export const value = 1;\n",
+      "repository/entry.ts": 'import "@outside/value"; import "./linked/value"; import "./local";\n',
+      "repository/local.ts": "export const value = 1;\n",
+      "repository/tsconfig.json": JSON.stringify({ compilerOptions: {
+        module: "ESNext", moduleResolution: "Bundler", paths: { "@outside/*": ["../external/*"] },
+      } }),
+    });
+    await symlink(path.join(parent, "external"), path.join(root, "linked"), "junction");
+    const nativeRead = ts.sys.readFile;
+    t.mock.method(ts.sys, "readFile", (filePath: string) => {
+      assert.equal(path.relative(root, filePath).startsWith(".."), false, filePath);
+      assert.equal(filePath.includes(`${path.sep}linked${path.sep}`), false, filePath);
+      return nativeRead(filePath);
+    });
+    const result = await analyzeRepository(root);
+    assert.deepEqual(importRecord(result, "entry.ts", "@outside/value", "import").resolution,
+      { status: "unresolved", reason: "outside-repository-root" });
+    assert.deepEqual(importRecord(result, "entry.ts", "./linked/value", "import").resolution,
+      { status: "unresolved", reason: "symlink-not-followed" });
+    assert.deepEqual(result.edges, [{ source: "entry.ts", target: "local.ts", kinds: ["import"] }]);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

@@ -98,6 +98,7 @@ begin
   if has_function_privilege('authenticated', 'public.set_analysis_stage(uuid,uuid,text,text,text)', 'EXECUTE')
     or has_function_privilege('authenticated', 'public.fail_analysis(uuid,uuid,text,text)', 'EXECUTE')
     or has_function_privilege('authenticated', 'public.store_analysis(uuid,uuid,jsonb)', 'EXECUTE')
+    or has_function_privilege('anon', 'public.store_analysis(uuid,uuid,jsonb)', 'EXECUTE')
     or not has_function_privilege('service_role', 'public.set_analysis_stage(uuid,uuid,text,text,text)', 'EXECUTE')
     or not has_function_privilege('service_role', 'public.fail_analysis(uuid,uuid,text,text)', 'EXECUTE')
     or not has_function_privilege('service_role', 'public.store_analysis(uuid,uuid,jsonb)', 'EXECUTE') then
@@ -342,7 +343,66 @@ end;
 $$;
 reset role;
 
--- Store the first graph.
+-- Keep a complete graph in another organization while the first graph is
+-- stored and replaced. Its source path overlaps, and it owns the endpoint that
+-- must still be rejected as missing from the replacement below.
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"role":"authenticated","sub":"user_phase07","o":{"id":"org_phase07_fixture_b"}}',
+  true
+);
+select * from public.start_analysis('https://github.com/example/neighbor', 'example/neighbor');
+reset role;
+set local role service_role;
+do $$
+declare
+  target uuid;
+  active_run uuid;
+  source_id uuid;
+  table_name text;
+  graph_rows jsonb;
+begin
+  select a.id, a.run_id into strict target, active_run
+  from public.analyses a
+  join public.projects p on p.organization_id = a.organization_id and p.id = a.project_id
+  where a.organization_id = 'org_phase07_fixture_b'
+    and p.canonical_repository_url = 'https://github.com/example/neighbor';
+
+  if public.store_analysis(target, active_run, private.phase07_result('src/missing.ts', 'src/missing.ts'))
+      is distinct from true then
+    raise exception 'The neighboring organization graph was not stored';
+  end if;
+  select id into strict source_id from public.files
+  where organization_id = 'org_phase07_fixture_b' and analysis_id = target and path = 'src/a.ts';
+  insert into public.routes (organization_id, analysis_id, file_id, method, path)
+  values ('org_phase07_fixture_b', target, source_id, 'GET', '/neighbor');
+  insert into public.file_roles (organization_id, analysis_id, file_id, role)
+  values ('org_phase07_fixture_b', target, source_id, 'entry');
+  insert into public.explanations (organization_id, analysis_id, file_id, content)
+  values ('org_phase07_fixture_b', target, source_id, 'Neighbor graph explanation.');
+  insert into public.insights (organization_id, analysis_id, content)
+  values ('org_phase07_fixture_b', target, 'Neighbor graph insight.');
+
+  -- Compare full rows later, including generated IDs and completion metadata,
+  -- so deleting and recreating a neighboring graph cannot pass by row count.
+  perform set_config('cartograph.phase07_neighbor_id', target::text, true);
+  foreach table_name in array array[
+    'analyses', 'files', 'edges', 'routes', 'file_roles', 'explanations', 'insights'
+  ] loop
+    execute format(
+      'select coalesce(jsonb_agg(to_jsonb(stored) order by stored.id), ''[]''::jsonb)
+       from public.%I stored where stored.organization_id = $1 and stored.%I = $2',
+      table_name, case when table_name = 'analyses' then 'id' else 'analysis_id' end
+    ) into graph_rows using 'org_phase07_fixture_b', target;
+    perform set_config('cartograph.phase07_neighbor_' || table_name, graph_rows::text, true);
+  end loop;
+end;
+$$;
+reset role;
+
+-- Store the first graph. The service call still has organization B's JWT;
+-- storage must derive organization A from the locked analysis row instead.
 set local role service_role;
 do $$
 declare
@@ -360,15 +420,20 @@ begin
   where a.organization_id = 'org_phase07_fixture_a'
     and p.canonical_repository_url = 'https://github.com/example/repo';
 
+  if public.store_analysis(target, gen_random_uuid(), private.phase07_result('src/b.ts', 'src/b.ts'))
+      is distinct from false then
+    raise exception 'A superseded run stored a graph';
+  end if;
+
   select public.store_analysis(target, active_run, private.phase07_result('src/b.ts', 'src/b.ts'))
     into stored;
-  if not stored then
+  if stored is distinct from true then
     raise exception 'A valid graph was not stored';
   end if;
 
   select public.store_analysis(target, active_run, private.phase07_result('src/b.ts', 'src/b.ts'))
     into rejected;
-  if rejected then
+  if rejected is distinct from false then
     raise exception 'A completed analysis accepted a second graph for the same run';
   end if;
 
@@ -376,9 +441,23 @@ begin
   select count(*) into edge_count from public.edges where analysis_id = target;
   select array_agg(path order by path) into stored_paths
   from public.files where analysis_id = target;
-  if file_count <> 2 or edge_count <> 1 or stored_paths <> array['src/a.ts', 'src/b.ts'] then
+  if file_count <> 2 or edge_count <> 1
+    or stored_paths is distinct from array['src/a.ts', 'src/b.ts'] then
     raise exception 'The stored graph does not match the result: % files, % edges, % paths',
       file_count, edge_count, stored_paths;
+  end if;
+
+  if not exists (
+    select 1 from public.edges e
+    join public.files source on source.organization_id = e.organization_id
+      and source.analysis_id = e.analysis_id and source.id = e.source_file_id
+    join public.files destination on destination.organization_id = e.organization_id
+      and destination.analysis_id = e.analysis_id and destination.id = e.target_file_id
+    where e.organization_id = 'org_phase07_fixture_a' and e.analysis_id = target
+      and source.path = 'src/a.ts' and destination.path = 'src/b.ts'
+      and e.kinds = array['import']::text[]
+  ) then
+    raise exception 'The stored edge did not resolve both endpoints in its own organization and analysis';
   end if;
 
   if (select fan_out from public.files where analysis_id = target and path = 'src/a.ts') <> 1
@@ -504,7 +583,8 @@ begin
     raise exception 'A rejected store changed the stored graph (% files, status %)', file_count, stored_status;
   end if;
 
-  if not public.store_analysis(target, active_run, private.phase07_result('src/c.ts', 'src/c.ts')) then
+  if public.store_analysis(target, active_run, private.phase07_result('src/c.ts', 'src/c.ts'))
+      is distinct from true then
     raise exception 'The replacement graph was not stored';
   end if;
 end;
@@ -541,6 +621,29 @@ begin
     or (select import_records -> 0 ->> 'source' from public.analyses where id = target) <> 'src/a.ts' then
     raise exception 'Completion metadata was not stored';
   end if;
+end;
+$$;
+
+-- Read as the migration owner so RLS cannot hide neighboring rows changed by
+-- the rejected replacement or successful replacement in organization A.
+do $$
+declare
+  neighbor uuid := current_setting('cartograph.phase07_neighbor_id')::uuid;
+  table_name text;
+  graph_rows jsonb;
+begin
+  foreach table_name in array array[
+    'analyses', 'files', 'edges', 'routes', 'file_roles', 'explanations', 'insights'
+  ] loop
+    execute format(
+      'select coalesce(jsonb_agg(to_jsonb(stored) order by stored.id), ''[]''::jsonb)
+       from public.%I stored where stored.organization_id = $1 and stored.%I = $2',
+      table_name, case when table_name = 'analyses' then 'id' else 'analysis_id' end
+    ) into graph_rows using 'org_phase07_fixture_b', neighbor;
+    if graph_rows is distinct from current_setting('cartograph.phase07_neighbor_' || table_name)::jsonb then
+      raise exception 'Storing another organization graph changed neighboring % rows', table_name;
+    end if;
+  end loop;
 end;
 $$;
 

@@ -163,6 +163,14 @@ Links and special archive entries fail with an explicit reason. A nonexistent or
 private repository records a failed Fetch stage. An unexpected exception records
 its stage and reason; runs with no update for five minutes show **Stale**.
 
+TypeScript configuration and import resolution use filesystem callbacks confined
+to the repository root and refuse symlinks. Configuration globs do not enumerate
+files; the discovery stage owns file selection. An unavailable or out-of-root
+extended configuration fails the Parse stage, and blocked local imports remain
+unresolved with a reason. Syntax trees use an in-memory filesystem. Parsing still
+runs in the application process without aggregate concurrency or memory limits;
+the per-archive limits do not provide process isolation.
+
 Each organization has one analysis per canonical repository URL. Pasting that URL
 again opens the existing page. **Rerun analysis** on that page starts a new run
 only after the previous one completed, failed, or became stale. Run IDs prevent

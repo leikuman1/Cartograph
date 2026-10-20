@@ -1,9 +1,9 @@
-import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { Project, ts, type SourceFile } from "ts-morph";
 import type { ImportResolution, SkippedFile } from "./contract";
 import type { DiscoveredSourceFile } from "./discovery";
 import { toRepositoryPath } from "./discovery";
+import { createRepositoryFileSystem, type RepositoryFileSystem } from "./filesystem";
 
 const EMPTY_INPUT_DIAGNOSTICS = new Set([18002, 18003]);
 
@@ -20,6 +20,7 @@ interface ResolutionContext {
   compilerOptions: ts.CompilerOptions;
   configDirectory: string;
   cache: ts.ModuleResolutionCache;
+  fileSystem: RepositoryFileSystem;
 }
 
 export interface ParsedSourceFile {
@@ -57,25 +58,18 @@ function pathInside(rootPath: string, targetPath: string) {
   return toRepositoryPath(relativePath);
 }
 
-async function isFile(filePath: string) {
-  try {
-    return (await stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function nearestConfig(
+function nearestConfig(
   directory: string,
   rootPath: string,
   cache: Map<string, string | null>,
-): Promise<string | null> {
+  host: ts.ModuleResolutionHost,
+): string | null {
   const cached = cache.get(directory);
   if (cached !== undefined) return cached;
 
   for (const name of ["tsconfig.json", "jsconfig.json"]) {
     const candidate = path.join(directory, name);
-    if (await isFile(candidate)) {
+    if (host.fileExists(candidate)) {
       cache.set(directory, candidate);
       return candidate;
     }
@@ -90,7 +84,7 @@ async function nearestConfig(
   const parentOutsideRoot = parent !== rootPath && pathInside(rootPath, parent) === null;
   const result = parent === directory || parentOutsideRoot
     ? null
-    : await nearestConfig(parent, rootPath, cache);
+    : nearestConfig(parent, rootPath, cache, host);
   cache.set(directory, result);
   return result;
 }
@@ -103,7 +97,7 @@ function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]) {
   }).trim();
 }
 
-function loadCompilerOptions(configPath: string | null, rootPath: string) {
+function loadCompilerOptions(configPath: string | null, rootPath: string, fileSystem: RepositoryFileSystem) {
   if (!configPath) {
     return {
       compilerOptions: DEFAULT_COMPILER_OPTIONS,
@@ -112,14 +106,22 @@ function loadCompilerOptions(configPath: string | null, rootPath: string) {
   }
 
   const unrecoverable: ts.Diagnostic[] = [];
+  fileSystem.blocked.clear();
   const parsed = ts.getParsedCommandLineOfConfigFile(configPath, undefined, {
-    fileExists: ts.sys.fileExists,
-    readDirectory: ts.sys.readDirectory,
-    readFile: ts.sys.readFile,
+    ...fileSystem.host,
+    readFile: filePath => fileSystem.host.readFile(filePath),
+    // Discovery already selected every input. Config globs must not enumerate
+    // the filesystem again or escape the repository through include patterns.
+    readDirectory: () => [],
     useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
     getCurrentDirectory: () => rootPath,
     onUnRecoverableConfigFileDiagnostic: diagnostic => unrecoverable.push(diagnostic),
   });
+  if (fileSystem.blocked.has("symlink-not-followed")) {
+    throw new Error(`Cannot load TypeScript configuration ${configPath}: symlinks are not followed.`);
+  }
+  // TypeScript probes parent node_modules folders for package-based extends.
+  // Outside probes see no entries; an unavailable extends remains a TS error.
   // Discovery selects the source files; an empty config input list does not invalidate its options.
   const errors = [
     ...unrecoverable,
@@ -155,10 +157,15 @@ export async function parseSourceFiles(
   discoveredFiles: readonly DiscoveredSourceFile[],
 ): Promise<ParsedRepository> {
   const configCache = new Map<string, string | null>();
+  const fileSystem = createRepositoryFileSystem(rootPath);
   const groups = new Map<string, DiscoveredSourceFile[]>();
 
   for (const file of discoveredFiles) {
-    const configPath = await nearestConfig(path.dirname(file.absolutePath), rootPath, configCache);
+    fileSystem.blocked.clear();
+    const configPath = nearestConfig(path.dirname(file.absolutePath), rootPath, configCache, fileSystem.host);
+    if (fileSystem.blocked.has("symlink-not-followed")) {
+      throw new Error("Cannot load TypeScript configuration: symlinks are not followed.");
+    }
     const key = configPath ?? "\0default";
     const files = groups.get(key) ?? [];
     files.push(file);
@@ -169,15 +176,17 @@ export async function parseSourceFiles(
   const parseFailures: SkippedFile[] = [];
   for (const [key, files] of [...groups.entries()].sort(([left], [right]) => compareText(left, right))) {
     const configPath = key === "\0default" ? null : key;
-    const { compilerOptions, configDirectory } = loadCompilerOptions(configPath, rootPath);
+    const { compilerOptions, configDirectory } = loadCompilerOptions(configPath, rootPath, fileSystem);
     const project = new Project({
       compilerOptions,
+      useInMemoryFileSystem: true,
       skipFileDependencyResolution: true,
       skipLoadingLibFiles: true,
     });
     const context: ResolutionContext = {
       compilerOptions,
       configDirectory,
+      fileSystem,
       cache: ts.createModuleResolutionCache(
         configDirectory,
         canonicalPath,
@@ -258,25 +267,17 @@ function excludedReason(index: ResolutionIndex, repositoryTarget: string) {
   return directory ? `target-in-${directory.reason}-directory` : "resolved-target-not-parsed";
 }
 
-async function classifyResolvedPath(
+function classifyResolvedPath(
   resolvedPath: string,
   index: ResolutionIndex,
   externalLibraryImport: boolean,
-): Promise<ImportResolution> {
-  let resolvedRealPath: string;
-  try {
-    resolvedRealPath = await realpath(resolvedPath);
-  } catch {
-    return externalLibraryImport
-      ? { status: "external", reason: "resolved-external-library" }
-      : { status: "unresolved", reason: "resolved-file-no-longer-exists" };
-  }
-
+): ImportResolution {
+  const resolvedRealPath = path.resolve(resolvedPath);
   const internalTarget = index.parsedPaths.get(canonicalPath(resolvedRealPath));
   if (internalTarget) return { status: "internal", target: internalTarget };
 
   const repositoryTarget = pathInside(index.rootPath, resolvedRealPath);
-  if (!repositoryTarget) return { status: "external", reason: "resolved-outside-root" };
+  if (!repositoryTarget) return { status: "unresolved", reason: "outside-repository-root" };
   if (externalLibraryImport || hasNodeModulesSegment(resolvedRealPath)) {
     return { status: "external", reason: "resolved-external-library" };
   }
@@ -288,7 +289,7 @@ async function classifyResolvedPath(
   };
 }
 
-async function exactLocalCandidates(
+function exactLocalCandidates(
   specifier: string,
   source: ParsedSourceFile,
 ) {
@@ -314,7 +315,7 @@ async function exactLocalCandidates(
 
   const existing: string[] = [];
   for (const candidate of candidates) {
-    if (await isFile(candidate)) existing.push(candidate);
+    if (source.resolutionContext.fileSystem.host.fileExists(candidate)) existing.push(candidate);
   }
   return existing;
 }
@@ -342,11 +343,13 @@ export async function resolveImport(
   specifier: string,
   index: ResolutionIndex,
 ): Promise<ImportResolution> {
+  const { fileSystem } = source.resolutionContext;
+  fileSystem.blocked.clear();
   const result = ts.resolveModuleName(
     specifier,
     source.discovered.absolutePath,
     source.resolutionContext.compilerOptions,
-    ts.sys,
+    fileSystem.host,
     source.resolutionContext.cache,
   );
   if (result.resolvedModule) {
@@ -357,7 +360,7 @@ export async function resolveImport(
     );
   }
 
-  for (const candidate of await exactLocalCandidates(specifier, source)) {
+  for (const candidate of exactLocalCandidates(specifier, source)) {
     return classifyResolvedPath(candidate, index, false);
   }
 
@@ -369,5 +372,12 @@ export async function resolveImport(
     return { status: "external", reason: "package-specifier" };
   }
 
-  return { status: "unresolved", reason: "typescript-could-not-resolve-local-specifier" };
+  if (fileSystem.blocked.has("symlink-not-followed")) {
+    return { status: "unresolved", reason: "symlink-not-followed" };
+  }
+  return {
+    status: "unresolved",
+    reason: fileSystem.blocked.has("outside-repository-root")
+      ? "outside-repository-root" : "typescript-could-not-resolve-local-specifier",
+  };
 }
