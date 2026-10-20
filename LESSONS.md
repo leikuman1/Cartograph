@@ -68,18 +68,19 @@ with an unknown option and no argument.
 ## 4. Partial configuration fails at startup, not at first use
 
 ### Problem
-Setting some of the four credentials left the app booting normally, then failing
-when a workspace or authentication route was opened.
+During the former offline-preview phase, partial credential configuration let
+the app start normally, then fail when a workspace or authentication route was
+opened.
 
 ### Root Cause
-Validation ran at the request boundary. A fully blank configuration has to stay
-legal for the offline preview, so the boundary check could not distinguish
-"offline" from "half configured".
+Validation ran only at the request boundary. The earlier offline preview allowed
+all-blank credentials, which obscured accidental partial configuration.
 
 ### Rule
-If any credential is nonblank, validate the complete set during startup. Blank
-everywhere is a supported mode; blank in part is a mistake and says so
-immediately.
+If any credential is nonblank, validate all five required values during startup.
+The offline preview has been removed. All-blank configuration is permitted only
+for offline type generation and compilation; application requests still require
+all five values.
 
 ### Verification
 `scripts/environment.test.ts` walks every partial combination, plus all-blank,
