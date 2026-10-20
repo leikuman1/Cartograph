@@ -10,18 +10,26 @@ const commitSha = "a".repeat(40);
 const repository = normalizeRepositoryUrl("https://github.com/owner/repo");
 
 // A real tar member makes the fetch test cover the recorded SHA through to disk.
-function publicArchive() {
-  const body = Buffer.from("public source\n");
-  const header = Buffer.alloc(512);
-  header.write(`repo-${commitSha}/README.md`);
-  header.write(`${body.length.toString(8).padStart(11, "0")}\0`, 124, 12);
-  header.fill(32, 148, 156);
-  header.write("0", 156);
-  header.write("ustar\0", 257);
-  let checksum = 0;
-  for (const byte of header) checksum += byte;
-  header.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8);
-  return gzipSync(Buffer.concat([header, body, Buffer.alloc(512 - body.length), Buffer.alloc(1024)]));
+function publicArchive(includeLink = false) {
+  const entries = [
+    { name: "README.md", type: "0", body: Buffer.from("public source\n") },
+    ...(includeLink ? [{ name: "linked.ts", type: "2", body: Buffer.alloc(0) }] : []),
+  ];
+  const parts: Buffer[] = [];
+  for (const entry of entries) {
+    const header = Buffer.alloc(512);
+    header.write(`repo-${commitSha}/${entry.name}`);
+    header.write(`${entry.body.length.toString(8).padStart(11, "0")}\0`, 124, 12);
+    header.fill(32, 148, 156);
+    header.write(entry.type, 156);
+    if (entry.type === "2") header.write("../outside", 157);
+    header.write("ustar\0", 257);
+    let checksum = 0;
+    for (const byte of header) checksum += byte;
+    header.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8);
+    parts.push(header, entry.body, Buffer.alloc((512 - entry.body.length % 512) % 512));
+  }
+  return gzipSync(Buffer.concat([...parts, Buffer.alloc(1024)]));
 }
 
 async function temporaryDirectories() {
@@ -83,6 +91,20 @@ test("fetches public metadata and the exact recorded commit archive without cred
   }
   await assert.rejects(access(extractionDirectory), /ENOENT/);
   await fetched.cleanup();
+});
+
+test("fetch returns skipped archive links without creating them", async t => {
+  mockGithub(t, () => new Response(publicArchive(true)));
+  const fetched = await fetchRepository(repository);
+  try {
+    assert.equal(fetched.commitSha, commitSha);
+    assert.deepEqual(fetched.skippedFiles.map(({ path, reason }) => ({ path, reason })), [
+      { path: "linked.ts", reason: "symlink" },
+    ]);
+    assert.deepEqual(await readdir(fetched.directory), ["README.md"]);
+  } finally {
+    await fetched.cleanup();
+  }
 });
 
 test("removes temporary archive and source directories on download or extraction failure", async t => {

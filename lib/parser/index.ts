@@ -80,7 +80,7 @@ export async function analyzeDiscoveredRepository(
   options: AnalyzeRepositoryOptions = {},
 ): Promise<AnalysisResult> {
   const adapter = options.adapter ?? fallbackAdapter;
-  const parsed = await parseSourceFiles(discovered.rootPath, discovered.sourceFiles);
+  const parsed = await parseSourceFiles(discovered.rootPath, discovered.sourceFiles, discovered.skippedFiles);
   const skippedFiles = sortSkippedFiles([
     ...discovered.skippedFiles,
     ...parsed.parseFailures,

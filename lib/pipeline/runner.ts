@@ -60,7 +60,7 @@ export async function runAnalysis(analysisId: string, runId: string, repositoryU
 
     current = "select";
     await stage(client, analysisId, runId, "select", "Selecting files to parse");
-    const discovery = await discoverRepository(fetched.directory);
+    const discovery = await discoverRepository(fetched.directory, fetched.skippedFiles);
     await stage(
       client, analysisId, runId, "select",
       `Selected ${discovery.sourceFiles.length} files; skipped ${discovery.skippedFiles.length}`,

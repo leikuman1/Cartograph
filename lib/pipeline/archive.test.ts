@@ -7,6 +7,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import test, { type TestContext } from "node:test";
 import { createGzip, gzipSync } from "node:zlib";
+import { analyzeDiscoveredRepository } from "../parser";
+import { discoverRepository } from "../parser/discovery";
 import { extractArchive } from "./repository";
 
 interface Entry {
@@ -80,7 +82,7 @@ test("extracts regular files, empty files and explicit directories", async t => 
     { path: "repo-abc123/empty.ts" },
     { path: "repo-abc123/src/index.ts", content: "export const value = 1;\n" },
   ])));
-  const root = await extractArchive(archivePath, output);
+  const { directory: root } = await extractArchive(archivePath, output);
   assert.equal(path.basename(root), "repo-abc123");
   assert.equal(await readFile(path.join(root, "src", "index.ts"), "utf8"), "export const value = 1;\n");
   assert.equal(await readFile(path.join(root, "empty.ts"), "utf8"), "");
@@ -95,7 +97,7 @@ test("consumes a directory's local PAX path before the next file", async t => {
     { path: "placeholder/", type: "5" },
     { path: "repo-abc123/index.ts", content: "unchanged path" },
   ])));
-  const root = await extractArchive(archivePath, output);
+  const { directory: root } = await extractArchive(archivePath, output);
   assert.equal(await readFile(path.join(root, "index.ts"), "utf8"), "unchanged path");
   assert.deepEqual(await readdir(path.join(output, directoryName)), []);
 });
@@ -121,12 +123,75 @@ test("honors GNU long names", async t => {
   assert.equal(await readFile(path.join(output, longName), "utf8"), "long name");
 });
 
-test("rejects links and special files explicitly", async t => {
-  for (const type of ["1", "2", "3", "4", "6", "S"]) {
+test("skips links without creating targets and carries omissions into coverage and imports", async t => {
+  const { archivePath, output } = await fixture(t, gzipSync(tar([
+    { path: "repo/", type: "5" },
+    { path: "repo/linked.ts", type: "2", link: "/etc/passwd", content: "discard" },
+    { path: "PaxHeader", type: "x", content: pax("path", "repo/hard.ts") },
+    { path: "placeholder", type: "1", link: "../../outside" },
+    { path: "repo/a.ts", content: 'import "./linked"; import "./hard"; import "./local";\n' },
+    { path: "repo/b.ts", content: 'import "./linked"; import "./hard";\n' },
+    { path: "repo/local.ts", content: "export const value = 1;\n" },
+  ])));
+  const extracted = await extractArchive(archivePath, output);
+  assert.deepEqual(await readdir(extracted.directory), ["a.ts", "b.ts", "local.ts"]);
+  assert.deepEqual(extracted.skippedFiles.map(({ path, reason }) => ({ path, reason })), [
+    { path: "hard.ts", reason: "unsupported-file-type" },
+    { path: "linked.ts", reason: "symlink" },
+  ]);
+  const discovery = await discoverRepository(extracted.directory, extracted.skippedFiles);
+  const result = await analyzeDiscoveredRepository(discovery);
+  assert.equal(result.coverage.files.discovered, 5);
+  assert.equal(result.coverage.files.parsed, 3);
+  assert.equal(result.coverage.files.skipped, 2);
+  assert.deepEqual(result.coverage.files.skippedFiles, extracted.skippedFiles);
+  for (const source of ["a.ts", "b.ts"]) {
+    assert.deepEqual(result.imports.find(record => record.source === source && record.specifier === "./linked")?.resolution,
+      { status: "unresolved", reason: "symlink-not-followed" });
+    assert.deepEqual(result.imports.find(record => record.source === source && record.specifier === "./hard")?.resolution,
+      { status: "unresolved", reason: "target-unsupported-file-type" });
+  }
+  assert.deepEqual(result.edges, [{ source: "a.ts", target: "local.ts", kinds: ["import"] }]);
+});
+
+test("rejects special files with the entry path and type", async t => {
+  for (const type of ["3", "4", "6", "S"]) {
     const { archivePath, output } = await fixture(t, gzipSync(tar([
-      { path: "repo-abc123/link.ts", type, link: "/etc/passwd" },
+      { path: "repo-abc123/special.ts", type },
     ])));
-    await assert.rejects(extractArchive(archivePath, output), /link or special file/);
+    await assert.rejects(extractArchive(archivePath, output), error => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /unsupported special file/);
+      assert.ok(error.message.includes(`repo-abc123/special.ts (type ${type})`));
+      return true;
+    });
+  }
+});
+
+test("skipped links still enforce path, duplicate, hierarchy and body limits", async t => {
+  for (const [entries, message] of [
+    [[{ path: "repo/../escape", type: "2" }], /unsafe path/],
+    [[{ path: "repo/link", type: "2" }, { path: "repo/link", content: "replacement" }], /duplicate entry/],
+    [[{ path: "repo/link", type: "1" }, { path: "repo/LINK", type: "2" }], /duplicate entry/],
+    [[{ path: "repo/link", type: "2" }, { path: "repo/link/entry.ts" }], /conflicting entries/],
+    [[{ path: "repo/link/entry.ts" }, { path: "repo/link", type: "2" }], /conflicting entries/],
+    [[{ path: "repo/link", type: "2", size: 200 * 1024 * 1024 + 1 }], /200 MiB limit/],
+    [[{ path: "repo/link", type: "2", size: 4096, content: "short" }], /inside an entry/],
+  ] satisfies [Entry[], RegExp][]) {
+    const { archivePath, output } = await fixture(t, gzipSync(tar(entries)));
+    await assert.rejects(extractArchive(archivePath, output), message);
+  }
+});
+
+test("omitted configuration links still fail parsing rather than silently using defaults", async t => {
+  for (const type of ["1", "2"]) {
+    const { archivePath, output } = await fixture(t, gzipSync(tar([
+      { path: "repo/tsconfig.json", type, link: "../external.json" },
+      { path: "repo/entry.ts", content: "export const value = 1;\n" },
+    ])));
+    const extracted = await extractArchive(archivePath, output);
+    const discovery = await discoverRepository(extracted.directory, extracted.skippedFiles);
+    await assert.rejects(analyzeDiscoveredRepository(discovery), /Cannot load TypeScript configuration/);
   }
 });
 
@@ -193,9 +258,15 @@ test("bounds all decompressed bytes, including trailing zero padding", async t =
   await assert.rejects(extractArchive(archivePath, output), /220 MiB decompressed limit/);
 });
 
-test("bounds directories and metadata in the entry count", async t => {
-  for (const entry of [{ path: "repo-abc123/", type: "5" }, { path: "PaxHeader", type: "g" }]) {
-    const { archivePath, output } = await fixture(t, gzipSync(tar(Array.from({ length: 20_001 }, () => entry))));
+test("bounds directories, links and metadata in the entry count", async t => {
+  for (const entry of [
+    { path: "repo-abc123/", type: "5" },
+    { path: "repo-abc123/link", type: "2" },
+    { path: "PaxHeader", type: "g" },
+  ]) {
+    const entries: Entry[] = Array.from({ length: 20_000 }, () => ({ path: "PaxHeader", type: "g" }));
+    entries.push(entry);
+    const { archivePath, output } = await fixture(t, gzipSync(tar(entries)));
     await assert.rejects(extractArchive(archivePath, output), /20,000 entries/);
   }
 });
@@ -213,7 +284,7 @@ test("rejects multiple roots, root files, directory bodies and duplicate files",
     [[{ path: "repo-one/", type: "5" }, { path: "repo-two/file" }], /more than one root/],
     [[{ path: "repo-file", content: "x" }], /root directory/],
     [[{ path: "repo/", type: "5", content: "x" }], /nonzero size/],
-    [[{ path: "repo/file" }, { path: "repo/file", content: "overwrite" }], /EEXIST/],
+    [[{ path: "repo/file" }, { path: "repo/file", content: "overwrite" }], /duplicate entry/],
   ] satisfies [Entry[], RegExp][]) {
     const { archivePath, output } = await fixture(t, gzipSync(tar(entries)));
     await assert.rejects(extractArchive(archivePath, output), message);

@@ -348,6 +348,170 @@ test("module resolution refuses outside aliases and symlink imports without read
   }
 });
 
+test("failed import reasons stay the same across files and cached lookups", async () => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    const imports = 'import "./linked/value"; import "@outside/value"; import "@/missing"; import "missing-package";\n';
+    await writeFixture(parent, {
+      "external/value.ts": "export const value = 1;\n",
+      "repository/a.ts": imports,
+      "repository/b.ts": 'import "missing-package"; import "@/missing"; import "@outside/value"; import "./linked/value";\n',
+      "repository/nested/c.ts": 'import "@outside/value"; import "@/missing"; import "missing-package";\n',
+      "repository/tsconfig.json": JSON.stringify({ compilerOptions: {
+        module: "ESNext", moduleResolution: "Bundler", baseUrl: ".",
+        paths: { "@outside/*": ["../external/*"], "@/*": ["./src/*"] },
+      } }),
+    });
+    await symlink(path.join(parent, "external"), path.join(root, "linked"), "junction");
+    const result = await analyzeRepository(root);
+    for (const source of ["a.ts", "b.ts"]) {
+      assert.deepEqual(importRecord(result, source, "./linked/value", "import").resolution,
+        { status: "unresolved", reason: "symlink-not-followed" }, source);
+    }
+    for (const source of ["a.ts", "b.ts", "nested/c.ts"]) {
+      for (const [specifier, reason] of [
+        ["@outside/value", "outside-repository-root"],
+        ["@/missing", "typescript-could-not-resolve-local-specifier"],
+        ["missing-package", "typescript-could-not-resolve-local-specifier"],
+      ]) {
+        assert.deepEqual(importRecord(result, source, specifier, "import").resolution,
+          { status: "unresolved", reason }, `${source}: ${specifier}`);
+      }
+    }
+    assert.equal(result.edges.length, 0);
+    assert.equal(result.coverage.imports.unresolved, 11);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("failure reasons ignore unselected paths patterns and baseUrl candidates", async () => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    await writeFixture(parent, {
+      "external/value.ts": "export const value = 1;\n",
+      "repository/a.ts": 'import "@/exact"; import "@/specific/value"; import "@/fallback";\n',
+      "repository/b.ts": 'import "@/exact"; import "@/specific/value"; import "@/fallback";\n',
+      "repository/local.ts": "export const value = 1;\n",
+      "repository/tsconfig.json": JSON.stringify({ compilerOptions: {
+        module: "ESNext", moduleResolution: "Bundler", baseUrl: "../external",
+        paths: {
+          "@/*": ["./*"],
+          "@/exact": ["../repository/missing/exact"],
+          "@/specific/*": ["../repository/missing/*"],
+          "@/fallback": ["./value", "../repository/local"],
+        },
+      } }),
+    });
+    const result = await analyzeRepository(root);
+    for (const source of ["a.ts", "b.ts"]) {
+      for (const specifier of ["@/exact", "@/specific/value"]) {
+        assert.deepEqual(importRecord(result, source, specifier, "import").resolution,
+          { status: "unresolved", reason: "typescript-could-not-resolve-local-specifier" }, specifier);
+      }
+      assert.deepEqual(importRecord(result, source, "@/fallback", "import").resolution,
+        { status: "internal", target: "local.ts" });
+    }
+    assert.equal(result.edges.length, 2);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("failure diagnosis uses inherited paths origins and rootDirs candidates", async () => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    await writeFixture(parent, {
+      "external/value.ts": "export const value = 1;\n",
+      "repository/config/base.json": JSON.stringify({ compilerOptions: {
+        module: "ESNext", moduleResolution: "Bundler", paths: { "@/*": ["./missing/*"] },
+        rootDirs: ["../src", "../linked"],
+      } }),
+      "repository/tsconfig.json": JSON.stringify({ extends: "./config/base.json" }),
+      "repository/src/a.ts": 'import "@/value"; import "./value";\n',
+      "repository/src/b.ts": 'import "./value"; import "@/value";\n',
+    });
+    for (const directory of ["missing", "linked"]) {
+      await symlink(path.join(parent, "external"), path.join(root, directory), "junction");
+    }
+    const result = await analyzeRepository(root);
+    for (const source of ["src/a.ts", "src/b.ts"]) {
+      assert.deepEqual(importRecord(result, source, "@/value", "import").resolution,
+        { status: "unresolved", reason: "typescript-could-not-resolve-local-specifier" });
+      assert.deepEqual(importRecord(result, source, "./value", "import").resolution,
+        { status: "unresolved", reason: "symlink-not-followed" });
+    }
+    assert.equal(result.edges.length, 0);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of [
+  { baseUrl: "../external", reason: "outside-repository-root" },
+  { baseUrl: "./linked", reason: "symlink-not-followed" },
+]) {
+  test(`baseUrl failures preserve ${scenario.reason} across files`, async () => {
+    const parent = await temporaryRepository();
+    const root = path.join(parent, "repository");
+    try {
+      await writeFixture(parent, {
+        "external/value.ts": "export const value = 1;\n",
+        "repository/a.ts": 'import "value";\n',
+        "repository/b.ts": 'import "value";\n',
+        "repository/tsconfig.json": JSON.stringify({ compilerOptions: {
+          module: "ESNext", moduleResolution: "Bundler", baseUrl: scenario.baseUrl,
+        } }),
+      });
+      await symlink(path.join(parent, "external"), path.join(root, "linked"), "junction");
+      const result = await analyzeRepository(root);
+      for (const source of ["a.ts", "b.ts"]) {
+        assert.deepEqual(importRecord(result, source, "value", "import").resolution,
+          { status: "unresolved", reason: scenario.reason });
+      }
+      assert.equal(result.edges.length, 0);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+}
+
+test("failure diagnosis includes TypeScript extension and index probes", async () => {
+  const parent = await temporaryRepository();
+  const root = path.join(parent, "repository");
+  try {
+    const imports = 'import "./linked"; import "./linked.js"; import "./directory"; import "./native";\n';
+    await writeFixture(parent, {
+      "external/value.ts": "export const value = 1;\n",
+      "repository/a.ts": imports,
+      "repository/b.ts": imports,
+      "repository/tsconfig.json": JSON.stringify({ compilerOptions: {
+        module: "ESNext", moduleResolution: "Bundler", moduleSuffixes: [".native", ""],
+      } }),
+    });
+    // Junctions also work on Windows without file-symlink privileges. Give them
+    // source filenames to exercise the resolver's extension and index probes.
+    for (const target of ["linked.ts", "directory/index.ts", "native.native.ts"]) {
+      const destination = path.join(root, target);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await symlink(path.join(parent, "external"), destination, "junction");
+    }
+    const result = await analyzeRepository(root);
+    for (const source of ["a.ts", "b.ts"]) {
+      for (const specifier of ["./linked", "./linked.js", "./directory", "./native"]) {
+        assert.deepEqual(importRecord(result, source, specifier, "import").resolution,
+          { status: "unresolved", reason: "symlink-not-followed" }, `${source}: ${specifier}`);
+      }
+    }
+    assert.equal(result.edges.length, 0);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 for (const scenario of [
   { name: "include matches no inputs", extension: ".ts", inputs: { include: ["missing/**/*"] } },
   { name: "JavaScript files without allowJs", extension: ".js", inputs: {} },

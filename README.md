@@ -159,7 +159,10 @@ access permissions and GitHub tokens are not requested. Nothing from the archive
 is executed, and temporary files are removed after the run.
 
 The archive is limited to 50 MiB compressed, 200 MiB extracted, and 20,000 entries.
-Links and special archive entries fail with an explicit reason. A nonexistent or
+Symbolic links and hard links are never created or followed; their paths and
+reasons are counted as skipped files in coverage while regular files continue.
+Unsafe paths, conflicting entries, devices and other special archive entries
+still fail; unsupported entry errors include the path and type. A nonexistent or
 private repository records a failed Fetch stage. An unexpected exception records
 its stage and reason; runs with no update for five minutes show **Stale**.
 

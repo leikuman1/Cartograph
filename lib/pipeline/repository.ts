@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable, Transform, Writable } from "node:stream";
 import { pipeline as streamPipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
+import type { SkippedFile } from "../parser/contract";
 
 const GITHUB_API = "https://api.github.com";
 const ARCHIVE_HOST = "codeload.github.com";
@@ -24,8 +25,12 @@ export interface RepositoryReference {
   fullName: string;
 }
 
-export interface FetchedRepository {
+export interface ExtractedRepository {
   directory: string;
+  skippedFiles: SkippedFile[];
+}
+
+export interface FetchedRepository extends ExtractedRepository {
   commitSha: string;
   cleanup: () => Promise<void>;
 }
@@ -206,7 +211,7 @@ function readPax(body: Buffer): PaxAttributes {
 
 // Only regular files and directories are extracted. All limits include metadata
 // and padding so a tiny compressed input cannot create unbounded work or memory.
-export async function extractArchive(archivePath: string, destination: string) {
+export async function extractArchive(archivePath: string, destination: string): Promise<ExtractedRepository> {
   const destinationInfo = await lstat(destination);
   if (!destinationInfo.isDirectory() || destinationInfo.isSymbolicLink() || (await readdir(destination)).length) {
     throw new Error("Archive extraction requires a new empty directory.");
@@ -222,6 +227,10 @@ export async function extractArchive(archivePath: string, destination: string) {
   let padding = 0;
   let zeroBlocks = 0;
   let file: Awaited<ReturnType<typeof open>> | null = null;
+  const skippedFiles: SkippedFile[] = [];
+  const members = new Map<string, "directory" | "file" | "link">();
+  const parentPaths = new Set<string>();
+  let discardingLink = false;
   let metadata: { type: string; size: number; chunks: Buffer[]; read: number } | null = null;
 
   async function closeFile() {
@@ -248,6 +257,26 @@ export async function extractArchive(archivePath: string, destination: string) {
     metadata = null;
   }
 
+  function registerMember(entryPath: string, kind: "directory" | "file" | "link") {
+    // Reserve skipped paths too: a later member cannot replace a link or place
+    // files beneath it. Case folding preserves the same result on Windows.
+    const key = entryPath.toLowerCase();
+    if (members.has(key)) throw new Error(`The repository archive contains a duplicate entry: ${entryPath}.`);
+    let parent = path.posix.dirname(key);
+    while (parent !== ".") {
+      const ancestor = members.get(parent);
+      if (ancestor && ancestor !== "directory") {
+        throw new Error(`The repository archive contains conflicting entries: ${entryPath}.`);
+      }
+      parentPaths.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+    if (kind !== "directory" && parentPaths.has(key)) {
+      throw new Error(`The repository archive contains conflicting entries: ${entryPath}.`);
+    }
+    members.set(key, kind);
+  }
+
   async function consume(chunk: Buffer) {
     decompressedBytes += chunk.length;
     if (decompressedBytes > MAX_DECOMPRESSED_BYTES) {
@@ -269,16 +298,21 @@ export async function extractArchive(archivePath: string, destination: string) {
       }
       if (remaining > 0) {
         const take = Math.min(remaining, chunk.length - offset);
-        if (!file) throw new Error("The repository archive stream was interrupted.");
-        let written = 0;
-        while (written < take) {
-          const result = await file.write(chunk, offset + written, take - written, null);
-          if (result.bytesWritten <= 0) throw new Error("The repository archive file could not be written completely.");
-          written += result.bytesWritten;
+        if (!file && !discardingLink) throw new Error("The repository archive stream was interrupted.");
+        if (file) {
+          let written = 0;
+          while (written < take) {
+            const result = await file.write(chunk, offset + written, take - written, null);
+            if (result.bytesWritten <= 0) throw new Error("The repository archive file could not be written completely.");
+            written += result.bytesWritten;
+          }
         }
         remaining -= take;
         offset += take;
-        if (remaining === 0) await closeFile();
+        if (remaining === 0) {
+          discardingLink = false;
+          await closeFile();
+        }
         continue;
       }
       if (padding > 0) {
@@ -319,9 +353,6 @@ export async function extractArchive(archivePath: string, destination: string) {
       }
       const attributes = pending;
       pending = null; // A local PAX header applies to the next entry, including a directory.
-      if (type !== "0" && type !== "5") {
-        throw new Error("The repository archive contains a link or special file, which is not extracted.");
-      }
       const size = attributes?.size ?? headerSize;
       const prefix = readString(block, 345, 155);
       const name = readString(block, 0, 100);
@@ -329,6 +360,11 @@ export async function extractArchive(archivePath: string, destination: string) {
       const [archiveRoot, ...rest] = entryPath.split("/");
       if (rootName === null) rootName = archiveRoot;
       else if (rootName !== archiveRoot) throw new Error("The repository archive has more than one root.");
+      if (!["0", "5", "1", "2"].includes(type)) {
+        throw new Error(`The repository archive contains an unsupported special file: ${entryPath} (type ${type}).`);
+      }
+      const link = type === "1" || type === "2";
+      registerMember(entryPath, type === "5" ? "directory" : link ? "link" : "file");
       const targetPath = path.join(destination, ...entryPath.split("/"));
       if (type === "5") {
         if (size !== 0) throw new Error("The repository archive contains a directory with a nonzero size.");
@@ -339,6 +375,19 @@ export async function extractArchive(archivePath: string, destination: string) {
       extractedBytes += size;
       if (extractedBytes > MAX_EXTRACTED_BYTES) {
         throw new Error("The extracted repository is larger than the 200 MiB limit.");
+      }
+      if (link) {
+        skippedFiles.push({
+          path: rest.join("/"),
+          reason: type === "2" ? "symlink" : "unsupported-file-type",
+          detail: `${type === "2" ? "Symbolic link" : "Hard link"} in repository archive; not created or followed.`,
+        });
+        // Consume the body and padding without ever materializing its target.
+        await mkdir(path.dirname(targetPath), { recursive: true });
+        remaining = size;
+        padding = (512 - (size % 512)) % 512;
+        discardingLink = size > 0;
+        continue;
       }
       await mkdir(path.dirname(targetPath), { recursive: true });
       // Never overwrite an earlier archive member, including case aliases on Windows.
@@ -374,7 +423,8 @@ export async function extractArchive(archivePath: string, destination: string) {
     if (roots.length !== 1 || roots[0] !== rootName || !(await lstat(path.join(destination, rootName))).isDirectory()) {
       throw new Error("The repository archive did not extract to one directory.");
     }
-    return path.join(destination, rootName);
+    skippedFiles.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+    return { directory: path.join(destination, rootName), skippedFiles };
   } finally {
     await closeFile();
   }
@@ -407,8 +457,8 @@ export async function fetchRepository(repository: RepositoryReference): Promise<
     extractionDirectory = await mkdtemp(path.join(tmpdir(), "cartograph-source-"));
     const archivePath = path.join(archiveDirectory, "repository.tar.gz");
     await downloadArchive(repository, commitSha, archivePath);
-    const directory = await extractArchive(archivePath, extractionDirectory);
-    return { directory, commitSha, cleanup };
+    const extracted = await extractArchive(archivePath, extractionDirectory);
+    return { ...extracted, commitSha, cleanup };
   } catch (error) {
     await cleanup();
     throw error;

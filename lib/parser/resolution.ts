@@ -117,8 +117,8 @@ function loadCompilerOptions(configPath: string | null, rootPath: string, fileSy
     getCurrentDirectory: () => rootPath,
     onUnRecoverableConfigFileDiagnostic: diagnostic => unrecoverable.push(diagnostic),
   });
-  if (fileSystem.blocked.has("symlink-not-followed")) {
-    throw new Error(`Cannot load TypeScript configuration ${configPath}: symlinks are not followed.`);
+  if (fileSystem.blocked.has("symlink-not-followed") || fileSystem.blocked.has("unsupported-file-type")) {
+    throw new Error(`Cannot load TypeScript configuration ${configPath}: links and special files are not followed.`);
   }
   // TypeScript probes parent node_modules folders for package-based extends.
   // Outside probes see no entries; an unavailable extends remains a TS error.
@@ -155,16 +155,17 @@ function syntacticFailure(project: Project, sourceFile: SourceFile) {
 export async function parseSourceFiles(
   rootPath: string,
   discoveredFiles: readonly DiscoveredSourceFile[],
+  omittedFiles: readonly SkippedFile[] = [],
 ): Promise<ParsedRepository> {
   const configCache = new Map<string, string | null>();
-  const fileSystem = createRepositoryFileSystem(rootPath);
+  const fileSystem = createRepositoryFileSystem(rootPath, omittedFiles);
   const groups = new Map<string, DiscoveredSourceFile[]>();
 
   for (const file of discoveredFiles) {
     fileSystem.blocked.clear();
     const configPath = nearestConfig(path.dirname(file.absolutePath), rootPath, configCache, fileSystem.host);
-    if (fileSystem.blocked.has("symlink-not-followed")) {
-      throw new Error("Cannot load TypeScript configuration: symlinks are not followed.");
+    if (fileSystem.blocked.has("symlink-not-followed") || fileSystem.blocked.has("unsupported-file-type")) {
+      throw new Error("Cannot load TypeScript configuration: links and special files are not followed.");
     }
     const key = configPath ?? "\0default";
     const files = groups.get(key) ?? [];
@@ -232,21 +233,43 @@ function matchesPathPattern(specifier: string, pattern: string) {
   if (star === -1) return specifier === pattern ? "" : null;
   const prefix = pattern.slice(0, star);
   const suffix = pattern.slice(star + 1);
-  return specifier.startsWith(prefix) && specifier.endsWith(suffix)
+  return specifier.length >= prefix.length + suffix.length
+    && specifier.startsWith(prefix) && specifier.endsWith(suffix)
     ? specifier.slice(prefix.length, specifier.length - suffix.length)
     : null;
 }
 
 function matchingPathEntries(specifier: string, context: ResolutionContext) {
-  const matches: string[] = [];
+  let selected: { substitutions: string[]; wildcard: string; prefixLength: number } | undefined;
   for (const [pattern, substitutions] of Object.entries(context.compilerOptions.paths ?? {})) {
+    if (pattern === specifier) return substitutions;
     const wildcard = matchesPathPattern(specifier, pattern);
-    if (wildcard === null) continue;
-    for (const substitution of substitutions) {
-      matches.push(substitution.replace("*", wildcard));
+    const prefixLength = pattern.indexOf("*");
+    // TypeScript selects one pattern: exact first, then the longest prefix.
+    if (wildcard !== null && (!selected || prefixLength > selected.prefixLength)) {
+      selected = { substitutions, wildcard, prefixLength };
     }
   }
-  return matches;
+  return selected?.substitutions.map(substitution => selected.wildcard
+    ? substitution.replace("*", selected.wildcard) : substitution) ?? [];
+}
+
+function localCandidates(specifier: string, source: ParsedSourceFile) {
+  if (specifier.startsWith(".")) {
+    return [path.resolve(path.dirname(source.discovered.absolutePath), specifier)];
+  }
+  if (path.isAbsolute(specifier)) return [path.resolve(specifier)];
+
+  const { compilerOptions, configDirectory } = source.resolutionContext;
+  const substitutions = matchingPathEntries(specifier, source.resolutionContext);
+  if (substitutions.length > 0) {
+    // Inherited paths are relative to the configuration that declared them.
+    const pathsBasePath = compilerOptions.pathsBasePath;
+    const base = compilerOptions.baseUrl
+      ?? (typeof pathsBasePath === "string" ? pathsBasePath : configDirectory);
+    return substitutions.map(substitution => path.resolve(base, substitution));
+  }
+  return compilerOptions.baseUrl ? [path.resolve(compilerOptions.baseUrl, specifier)] : [];
 }
 
 function isBareSpecifier(specifier: string) {
@@ -296,28 +319,32 @@ function exactLocalCandidates(
   if (specifier.includes("?") || specifier.includes("#")) return [];
   if (!path.extname(specifier)) return [];
 
-  const candidates: string[] = [];
-  if (specifier.startsWith(".")) {
-    candidates.push(path.resolve(path.dirname(source.discovered.absolutePath), specifier));
-  } else if (path.isAbsolute(specifier)) {
-    candidates.push(path.resolve(specifier));
-  } else {
-    for (const substitution of matchingPathEntries(specifier, source.resolutionContext)) {
-      candidates.push(path.resolve(
-        source.resolutionContext.compilerOptions.baseUrl ?? source.resolutionContext.configDirectory,
-        substitution,
-      ));
-    }
-    if (source.resolutionContext.compilerOptions.baseUrl) {
-      candidates.push(path.resolve(source.resolutionContext.compilerOptions.baseUrl, specifier));
-    }
-  }
-
   const existing: string[] = [];
-  for (const candidate of candidates) {
+  for (const candidate of localCandidates(specifier, source)) {
     if (source.resolutionContext.fileSystem.host.fileExists(candidate)) existing.push(candidate);
   }
   return existing;
+}
+
+function localFailureReason(specifier: string, source: ParsedSourceFile) {
+  const { compilerOptions, fileSystem } = source.resolutionContext;
+  // Shared cache hits skip host callbacks; package searches probe unrelated
+  // ancestors. Collect fresh evidence only from this import's local candidates.
+  fileSystem.blocked.clear();
+  const diagnosticOptions: ts.CompilerOptions = {
+    ...compilerOptions,
+    paths: undefined,
+    baseUrl: undefined,
+    rootDirs: specifier.startsWith(".") ? compilerOptions.rootDirs : undefined,
+  };
+  for (const candidate of localCandidates(specifier, source)) {
+    fileSystem.host.fileExists(candidate);
+    ts.resolveModuleName(candidate, source.discovered.absolutePath, diagnosticOptions, fileSystem.host);
+  }
+  if (fileSystem.blocked.has("symlink-not-followed")) return "symlink-not-followed";
+  if (fileSystem.blocked.has("unsupported-file-type")) return "target-unsupported-file-type";
+  return fileSystem.blocked.has("outside-repository-root")
+    ? "outside-repository-root" : "typescript-could-not-resolve-local-specifier";
 }
 
 export function createResolutionIndex(
@@ -372,12 +399,5 @@ export async function resolveImport(
     return { status: "external", reason: "package-specifier" };
   }
 
-  if (fileSystem.blocked.has("symlink-not-followed")) {
-    return { status: "unresolved", reason: "symlink-not-followed" };
-  }
-  return {
-    status: "unresolved",
-    reason: fileSystem.blocked.has("outside-repository-root")
-      ? "outside-repository-root" : "typescript-could-not-resolve-local-specifier",
-  };
+  return { status: "unresolved", reason: localFailureReason(specifier, source) };
 }
