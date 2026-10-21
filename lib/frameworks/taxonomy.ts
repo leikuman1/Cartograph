@@ -37,7 +37,7 @@ const definitions: Record<FileCategory, CategoryDefinition> = {
   hook: { id: "hook", label: "Hooks", code: "H", description: "React hook files" },
   route: { id: "route", label: "Routes", code: "R", description: "Files in Express route directories" },
   model: { id: "model", label: "Models", code: "M", description: "Files in Express model directories" },
-  middleware: { id: "middleware", label: "Middleware", code: "M", description: "Files in Express middleware directories" },
+  middleware: { id: "middleware", label: "Middleware", code: "W", description: "Files in Express middleware directories" },
   source: { id: "source", label: "Source", code: "S", description: "Source files with no framework role" },
   test: { id: "test", label: "Tests", code: "T", description: "Test files" },
   declaration: { id: "declaration", label: "Declarations", code: "D", description: "Type declaration files" },

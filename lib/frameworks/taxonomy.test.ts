@@ -30,6 +30,8 @@ test("Express directory roles stay distinct while tests and declarations retain 
   assert.equal(categoryForFile(roles[2].file, roles).id, "model");
   assert.equal(categoryForFile(roles[3].file, roles).id, "test");
   assert.equal(categoryForFile(roles[4].file, roles).id, "declaration");
+  const roleCodes = categoriesForFramework("express").slice(0, 5).map(category => category.code);
+  assert.equal(new Set(roleCodes).size, roleCodes.length);
   assert.equal(frameworkSupportsRoutes("express"), false);
   assert.equal(frameworkSupportsEntries("express"), false);
 });

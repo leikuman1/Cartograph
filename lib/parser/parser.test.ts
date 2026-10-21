@@ -654,6 +654,50 @@ test("only runtime require bindings create CommonJS dependencies", async () => {
   }
 });
 
+test("ambient CommonJS declarations describe runtime globals without hiding real local bindings", async () => {
+  const root = await temporaryRepository();
+  try {
+    const globals = [
+      'var require: (specifier: string) => unknown;',
+      'var module: { exports: unknown };',
+      'var exports: Record<string, unknown>;',
+    ].join("\n");
+    await writeFixture(root, {
+      "ambient-variable.ts": [
+        'declare var require: (specifier: string) => unknown;',
+        'declare const module: { exports: unknown };',
+        'declare const exports: Record<string, unknown>;',
+        'require("./target"); exports.named = 1; module.exports.extra = 2;',
+        'function local(require: (specifier: string) => unknown) { require("./fake-parameter"); }',
+        'function hoisted() { require("./fake-var"); var require; }',
+        '{ require("./fake-block"); const require = () => {}; }',
+      ].join("\n"),
+      "ambient-function.ts": 'declare function require(specifier: string): unknown; require("./target");',
+      "ambient-global.ts": `export {}; declare global { ${globals} }\nrequire("./target"); exports.named = 1; module.exports.extra = 2;`,
+      "local.ts": [
+        `export {}; declare global { ${globals} }`,
+        'require("./fake-local"); const require = () => {};',
+        'const module = { exports: {} }; const exports = {};',
+        'module.exports = { fake: true }; exports.alsoFake = true;',
+      ].join("\n"),
+      "target.js": "module.exports = 1;",
+    });
+    const result = await analyzeRepository(root);
+    assert.deepEqual(result.edges, [
+      { source: "ambient-function.ts", target: "target.js", kinds: ["require"] },
+      { source: "ambient-global.ts", target: "target.js", kinds: ["require"] },
+      { source: "ambient-variable.ts", target: "target.js", kinds: ["require"] },
+    ]);
+    assert.deepEqual(result.imports.map(record => record.specifier), ["./target", "./target", "./target"]);
+    assert.deepEqual(Object.fromEntries(result.files.map(file => [file.path, file.exports])), {
+      "ambient-function.ts": [], "ambient-global.ts": ["extra", "named"],
+      "ambient-variable.ts": ["extra", "named"], "local.ts": [], "target.js": ["default"],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CommonJS exports keep literal names, replacements, and exports alias identity", async () => {
   const root = await temporaryRepository();
   try {
@@ -677,6 +721,47 @@ test("CommonJS exports keep literal names, replacements, and exports alias ident
       "named.js": ["alpha", "beta", "quoted-name"], "nested.js": [],
       "object.cjs": ["getter", "literal", "method", "shorthand", "value"],
       "reattached.js": ["active"], "replacement.js": ["current", "last"], "shadowed.js": [],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CommonJS exports follow direct top-level initializer and ordinary assignment chains", async () => {
+  const root = await temporaryRepository();
+  try {
+    await writeFixture(root, {
+      "app.js": 'var app = module.exports = express(); module.exports.handler = handler;',
+      "router.js": 'const router = module.exports = express.Router();',
+      "initializers.js": [
+        'exports.old = 1;',
+        'var app = module.exports = { current: 1 }, last = module.exports.last = 2;',
+        'exports.detached = 3;',
+      ].join("\n"),
+      "let.js": 'exports.old = 1; let app = module.exports = { current: 1 }; exports.detached = 2;',
+      "outer.js": 'exports.old = 1; app = module.exports = { current: 1 }; exports.detached = 2; module.exports.last = 3;',
+      "property.js": 'holder.app = module.exports = value;',
+      "reattached-initializer.js": 'const app = module.exports = exports = {}; exports.active = true;',
+      "reattached-outer.js": 'app = exports = module.exports = {}; exports.active = true;',
+      "detached.js": 'const local = exports = { local: 1 }; app = exports.hidden = 2;',
+      "shadowed.js": 'const module = { exports: {} }; const exports = {}; const app = module.exports = { fake: 1 }; app = exports.alsoFake = 2;',
+      "conditional.js": [
+        'const app = flag && (module.exports = { conditional: 1 });',
+        'app = flag ? module.exports = { branch: 1 } : null;',
+        'const make = () => module.exports = { nested: 1 };',
+        'const called = consume(module.exports = { argument: 1 });',
+        'if (flag) { const router = module.exports = { block: 1 }; }',
+        'for (const item of items) app = module.exports = { loop: 1 };',
+        'function initialize() { const app = module.exports = { functionBody: 1 }; }',
+      ].join("\n"),
+    });
+    const result = await analyzeRepository(root);
+    assert.deepEqual(Object.fromEntries(result.files.map(file => [file.path, file.exports])), {
+      "app.js": ["default", "handler"], "conditional.js": [], "detached.js": [],
+      "initializers.js": ["current", "last"], "let.js": ["current"],
+      "outer.js": ["current", "last"], "property.js": ["default"],
+      "reattached-initializer.js": ["active"], "reattached-outer.js": ["active"],
+      "router.js": ["default"], "shadowed.js": [],
     });
   } finally {
     await rm(root, { recursive: true, force: true });

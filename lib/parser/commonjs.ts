@@ -27,7 +27,13 @@ function sourceBindings(source: SourceFile) {
       }
     }
   }
-  for (const declaration of source.getDescendants()) {
+  source.forEachDescendant((declaration, traversal) => {
+    // Ambient declarations describe existing globals; they create no runtime
+    // bindings, including declarations nested inside a declare global block.
+    if (Node.isAmbientable(declaration) && declaration.isAmbient()) {
+      traversal.skip();
+      return;
+    }
     if (Node.isVariableDeclaration(declaration)) {
       const list = declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclarationList);
       add(declaration.getNameNode(), bindingScope(declaration, list?.getDeclarationKind() === "var"));
@@ -44,7 +50,7 @@ function sourceBindings(source: SourceFile) {
     } else if (Node.isNamespaceImport(declaration) || Node.isImportEqualsDeclaration(declaration)) {
       add(declaration.getNameNode(), source);
     }
-  }
+  });
   bindings.set(source, scopes);
   return scopes;
 }
@@ -127,10 +133,7 @@ export function extractCommonJsExports(sourceFile: SourceFile): string[] {
   function assign(left: Node, right: Node): Set<string> {
     const target = unwrap(left);
     const access = member(target);
-    if (!isModuleExports(target) && !isCommonJsIdentifier(target, "exports")
-      && !(access && (isModuleExports(access.receiver) || isCommonJsIdentifier(access.receiver, "exports")))) {
-      return new Set<string>();
-    }
+    // Ordinary targets can wrap an export assignment in the same direct chain.
     const names = valueNames(right);
     if (isModuleExports(target)) moduleNames = names;
     else if (isCommonJsIdentifier(target, "exports")) aliasNames = names;
@@ -147,10 +150,12 @@ export function extractCommonJsExports(sourceFile: SourceFile): string[] {
   // Process direct assignments in order so replacements and a detached exports
   // alias cannot leave names behind from the wrong object.
   for (const statement of sourceFile.getStatements()) {
-    if (!Node.isExpressionStatement(statement)) continue;
-    const expression = unwrap(statement.getExpression());
-    if (Node.isBinaryExpression(expression) && expression.getOperatorToken().getKind() === SyntaxKind.EqualsToken) {
-      assign(expression.getLeft(), expression.getRight());
+    if (Node.isExpressionStatement(statement)) valueNames(statement.getExpression());
+    else if (Node.isVariableStatement(statement) && !statement.isAmbient()) {
+      for (const declaration of statement.getDeclarations()) {
+        const initializer = declaration.getInitializer();
+        if (initializer) valueNames(initializer);
+      }
     }
   }
   return [...moduleNames].sort(compareExportNames);
