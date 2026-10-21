@@ -324,6 +324,8 @@ declare
   v_value jsonb;
   v_key text;
   v_other uuid;
+  v_stored boolean;
+  v_entries jsonb;
 begin
   for v_value in select value from jsonb_array_elements('[
     null, {}, "[]", 1, true,
@@ -379,8 +381,12 @@ begin
     raise exception 'Rejected payloads cleared the prior framework entries';
   end if;
   -- A phase 8 writer predating entries is valid and clears stale evidence.
-  if public.store_analysis(v_id, v_run, v_result - 'frameworkEntries') is distinct from true
-    or (select framework_entries from public.analyses where id = v_id) is distinct from '[]'::jsonb then
+  -- The write and the read must be separate statements: a scalar subquery inside
+  -- the same IF becomes an InitPlan that runs before store_analysis, so it would
+  -- compare against the entries this call is meant to clear.
+  v_stored := public.store_analysis(v_id, v_run, v_result - 'frameworkEntries');
+  select framework_entries into v_entries from public.analyses where id = v_id;
+  if v_stored is distinct from true or v_entries is distinct from '[]'::jsonb then
     raise exception 'Older phase 8 storage did not normalize and clear entries';
   end if;
   foreach v_other in array array[
