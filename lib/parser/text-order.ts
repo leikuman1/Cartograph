@@ -1,6 +1,6 @@
-// PostgreSQL stores these names in C order. Compare Unicode code points rather
-// than UTF-16 code units so a non-BMP object key survives the storage round trip.
-export function compareExportNames(left: string, right: string): number {
+// PostgreSQL's UTF-8 C collation compares Unicode code points. The standalone
+// graph keeps its existing UTF-16 order; use this only for storage contracts.
+export function compareCodePoints(left: string, right: string): number {
   const leftPoints = Array.from(left, character => character.codePointAt(0) ?? 0);
   const rightPoints = Array.from(right, character => character.codePointAt(0) ?? 0);
   for (let index = 0; index < Math.min(leftPoints.length, rightPoints.length); index += 1) {

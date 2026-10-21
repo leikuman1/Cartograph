@@ -109,7 +109,9 @@ preserves the exact five-key phase 7 response; `read_analysis_result_v2` preserv
 the phase 8 contract for framework roles, routes and special Next.js entry files.
 Phase 9 callers use `read_analysis_result_v3` for CommonJS exports, `require()`
 imports and Express roles. Earlier reader contracts stay stable; all keep
-`schemaVersion: 1`.
+`schemaVersion: 1`. The server encodes and decodes PostgreSQL C ordering at the
+storage boundary; standalone snapshots retain their original UTF-16 path and
+edge ordering, including non-BMP paths.
 
 ## Organization synchronization without webhooks
 

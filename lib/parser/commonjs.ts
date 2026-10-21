@@ -1,5 +1,5 @@
 import { Node, SyntaxKind, type SourceFile } from "ts-morph";
-import { compareExportNames } from "./export-names";
+import { compareCodePoints } from "./text-order";
 
 const bindings = new WeakMap<SourceFile, Map<string, Set<Node>>>();
 
@@ -161,5 +161,5 @@ export function extractCommonJsExports(sourceFile: SourceFile): string[] {
       }
     }
   }
-  return [...moduleNames].sort(compareExportNames);
+  return [...moduleNames].sort(compareCodePoints);
 }

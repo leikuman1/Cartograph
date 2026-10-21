@@ -1,6 +1,6 @@
 import "server-only";
 
-import { validateAnalysisResult } from "@/lib/parser/serialization";
+import { validateStoredAnalysisResult } from "@/lib/parser/serialization";
 import type { AnalysisResult } from "@/lib/parser/contract";
 import type { AnalysisSummary } from "@/lib/pipeline/types";
 import { createSupabaseClient } from "@/lib/supabase/server";
@@ -77,5 +77,5 @@ export async function loadAnalysisResult(id: string, runId: string): Promise<Ana
     p_run_id: runId,
   });
   if (error) throw new Error("The stored graph could not be loaded.", { cause: error });
-  return data === null ? null : validateAnalysisResult(data);
+  return data === null ? null : validateStoredAnalysisResult(data);
 }

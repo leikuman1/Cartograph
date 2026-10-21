@@ -3,6 +3,7 @@ import "server-only";
 import { createClient } from "@supabase/supabase-js";
 import { analyzeDiscoveredRepository } from "@/lib/parser";
 import { discoverRepository } from "@/lib/parser/discovery";
+import { prepareAnalysisForStorage } from "@/lib/parser/serialization";
 import { getEnvironment } from "@/lib/env";
 import { fetchRepository, normalizeRepositoryUrl } from "./repository";
 import type { PipelineStage } from "./types";
@@ -79,7 +80,7 @@ export async function runAnalysis(analysisId: string, runId: string, repositoryU
     const { data, error } = await client.rpc("store_analysis", {
       p_analysis_id: analysisId,
       p_run_id: runId,
-      p_result: result,
+      p_result: prepareAnalysisForStorage(result),
     });
     if (error) throw new Error(`The dependency map could not be stored: ${error.message}`);
     if (data !== true) throw new RunSuperseded();

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FRAMEWORKS, frameworkSupportsEntries } from "../frameworks/taxonomy";
-import { validateAnalysisResult } from "./serialization";
+import { prepareAnalysisForStorage, validateAnalysisResult, validateStoredAnalysisResult } from "./serialization";
 
 function snapshot() {
   return {
@@ -129,6 +129,73 @@ test("Express metadata and CommonJS imports round-trip without routes or special
     fileRoles: [fileRoles[0], ...fileRoles] }), /duplicate/);
   assert.throws(() => validateAnalysisResult({ ...current,
     fileRoles: [...fileRoles].reverse() }), /not stably sorted/);
+});
+
+test("stored Unicode graph rows normalize to the unchanged parser order", () => {
+  const fixture = snapshot();
+  const astral = "src/\u{10000}.ts";
+  const bmp = "src/.ts";
+  const paths = ["src/entry.ts", astral, bmp];
+  const current = {
+    ...fixture,
+    files: paths.map((file, index) => ({ ...fixture.files[0], path: file,
+      fanIn: index === 0 ? 0 : 1, fanOut: index === 0 ? 2 : 0,
+      exports: ["", "\u{10000}"] })),
+    edges: [astral, bmp].map(target => ({ source: paths[0], target, kinds: ["import"] })),
+    imports: [astral, bmp].map((target, index) => ({ source: paths[0], specifier: `./${target.slice(4, -3)}`,
+      kind: "import", line: index + 1, resolution: { status: "internal", target } })),
+    fileRoles: [astral, bmp].map(file => ({ file, role: "controller" })),
+    routes: [
+      { file: astral, method: "GET", path: "/\u{10000}", line: 1 },
+      { file: astral, method: "GET", path: "/", line: 2 },
+      { file: bmp, method: "GET", path: "/users", line: 3 },
+    ],
+    coverage: { files: { ...fixture.coverage.files, discovered: 3, parsed: 3 },
+      imports: { discovered: 2, internal: 2, external: 0, excluded: 0, unresolved: 0 } },
+  };
+  assert.deepEqual(validateAnalysisResult(current), current);
+  const stored = {
+    ...current,
+    files: [current.files[0], current.files[2], current.files[1]],
+    edges: [...current.edges].reverse(),
+    fileRoles: [...current.fileRoles].reverse(),
+    routes: [...current.routes].reverse(),
+  };
+  const before = JSON.stringify(stored);
+  assert.throws(() => validateAnalysisResult(stored), /files: entries are not stably sorted/);
+  assert.deepEqual(validateStoredAnalysisResult(stored), current);
+  assert.equal(JSON.stringify(stored), before);
+  for (const field of ["files", "edges", "fileRoles", "routes"] as const) {
+    assert.throws(() => validateStoredAnalysisResult({ ...stored, [field]: [...stored[field]].reverse() }), /not stably sorted/);
+    assert.throws(() => validateStoredAnalysisResult({ ...stored, [field]: [stored[field][0], ...stored[field]] }), /duplicate|does not match files length/);
+  }
+  assert.throws(() => validateStoredAnalysisResult({ ...stored, imports: [...stored.imports].reverse() }), /imports: entries are not stably sorted/);
+  assert.throws(() => validateStoredAnalysisResult({ ...stored,
+    files: stored.files.map(file => ({ ...file, exports: [...file.exports].reverse() })) }), /exports: entries are not stably sorted/);
+  assert.throws(() => validateStoredAnalysisResult({ ...stored,
+    files: stored.files.map(file => ({ ...file, fanIn: 42 })) }), /fan-in or fan-out/);
+  assert.throws(() => validateStoredAnalysisResult({ ...stored, edges: stored.edges.slice(1) }), /does not match internal import records/);
+  assert.throws(() => validateStoredAnalysisResult({ ...stored, unknown: true }), /unexpected field/);
+});
+
+test("Unicode framework entries use C order only across the database boundary", () => {
+  const fixture = snapshot();
+  const paths = ["app/\u{10000}/error.tsx", "app//error.tsx"];
+  const current = validateAnalysisResult({
+    ...fixture, framework: "nextjs", fileRoles: [], routes: [], frameworkEntries: paths,
+    files: paths.map(file => ({ ...fixture.files[0], path: file, folder: file.slice(0, file.lastIndexOf("/")) })),
+    coverage: { ...fixture.coverage, files: { ...fixture.coverage.files, discovered: 2, parsed: 2 } },
+  });
+  const before = JSON.stringify(current);
+  const prepared = prepareAnalysisForStorage(current);
+  assert.deepEqual(prepared.frameworkEntries, [...paths].reverse());
+  assert.equal(JSON.stringify(current), before);
+  const stored = { ...prepared, files: [...prepared.files].reverse() };
+  assert.deepEqual(validateStoredAnalysisResult(stored), current);
+  assert.throws(() => validateStoredAnalysisResult({ ...stored, frameworkEntries: paths }), /frameworkEntries: entries are not stably sorted/);
+  assert.throws(() => validateStoredAnalysisResult({ ...stored,
+    frameworkEntries: [...prepared.frameworkEntries, paths[0]] }), /duplicate/);
+  assert.throws(() => prepareAnalysisForStorage({ ...current, frameworkEntries: [...paths].reverse() }), /not stably sorted/);
 });
 
 test("framework metadata rejects missing files, unsupported roles, and fabricated source locations", () => {
