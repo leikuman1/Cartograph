@@ -2,6 +2,7 @@ import path from "node:path";
 import { analyzeFramework } from "../frameworks";
 import type { RepositoryAdapter } from "./adapter";
 import { fallbackAdapter } from "./adapter";
+import { extractCommonJsExports } from "./commonjs";
 import type {
   AnalysisResult,
   FileMetadata,
@@ -108,6 +109,7 @@ export async function analyzeDiscoveredRepository(
       }),
       lineCount: file.discovered.lineCount,
       contentHash: file.discovered.contentHash,
+      exports: extractCommonJsExports(file.sourceFile),
     };
   });
 
@@ -120,7 +122,7 @@ export async function analyzeDiscoveredRepository(
       if (occurrence.specifier === null) {
         resolution = {
           status: "excluded",
-          reason: "dynamic-import-not-string-literal",
+          reason: occurrence.kind === "require" ? "require-not-string-literal" : "dynamic-import-not-string-literal",
         };
       } else {
         const key = `${source.discovered.path}\0${occurrence.specifier}`;

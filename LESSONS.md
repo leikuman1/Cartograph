@@ -252,3 +252,48 @@ semantics. Repair an applied migration with a later migration.
 
 SQL checks assert the legacy reader's exact five keys, equality with the new
 reader's graph projection, and the same run and organization visibility for both.
+
+## 13. Runtime facts follow execution, not declaration names
+
+### Problem
+Ambient CommonJS declarations and type-only imports hid real requires and exports.
+Export assignments inside top-level variable initializers or ordinary assignment
+chains were missed.
+
+### Root Cause
+Every declaration was treated as a runtime binding, and export tracking stopped
+at a statement or assignment target that was not itself a CommonJS export.
+
+### Rule
+Skip ambient declaration and type-only import subtrees when collecting runtime
+bindings. Follow direct assignment chains in top-level expressions and variable
+initializers in order; keep conditional and nested execution outside the export
+contract.
+
+### Verification
+`lib/parser/parser.test.ts` covers ambient declarations and `declare global`,
+type-only import forms, real local shadowing, chained initializers and assignments,
+replacement and alias identity, and excluded conditional and nested writes.
+
+## 14. Database collation is a transport contract
+
+### Problem
+A stored graph with both non-BMP and high BMP paths failed to load because SQL C
+order differs from JavaScript UTF-16 order. Next special entries could also fail
+writer validation for the same reason.
+
+### Root Cause
+Reconstructed SQL rows were validated as canonical parser arrays without decoding
+their transport order. The writer's special-entry order was not reflected at the
+application boundary.
+
+### Rule
+Validate database ordering before converting it to the existing parser order.
+Encode special entries in the writer's order and decode them on read. Keep the
+standalone graph contract unchanged, including serialized edge order, and retain
+all duplicate, coverage, endpoint and fan-count checks.
+
+### Verification
+`lib/parser/serialization.test.ts` exercises Unicode paths, edge targets and route
+patterns, validates special-entry storage round trips, and rejects malformed
+transport order and graph data. The original standalone edge bytes stay intact.

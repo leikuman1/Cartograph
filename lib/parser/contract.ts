@@ -1,6 +1,6 @@
 import type { FileRole, Framework } from "../frameworks/taxonomy";
 
-export const IMPORT_KINDS = ["import", "re-export", "dynamic-import"] as const;
+export const IMPORT_KINDS = ["import", "re-export", "dynamic-import", "require"] as const;
 
 export type ImportKind = (typeof IMPORT_KINDS)[number];
 
@@ -12,6 +12,7 @@ export interface FileNode {
   contentHash: string;
   fanIn: number;
   fanOut: number;
+  exports: string[];
 }
 
 export interface GraphEdge {
@@ -132,6 +133,7 @@ export interface FileMetadata {
   module: string;
   lineCount: number;
   contentHash: string;
+  exports?: string[];
 }
 
 export interface InternalImport {

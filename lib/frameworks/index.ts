@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { FileRoleRecord, HttpRoute } from "../parser/contract";
 import { createRepositoryFileSystem } from "../parser/filesystem";
+import { extractImports } from "../parser/imports";
+import { analyzeExpress } from "./express";
 import { analyzeNest } from "./nest";
 import { analyzeNext } from "./next";
 import { reactRole } from "./react";
@@ -16,7 +18,7 @@ export interface FrameworkAnalysis {
   routes: HttpRoute[];
 }
 
-const PRECEDENCE: readonly Framework[] = ["nextjs", "nestjs", "react", "generic"];
+const PRECEDENCE: readonly Framework[] = ["nextjs", "nestjs", "express", "react", "generic"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -36,17 +38,26 @@ function dependencyNames(content: string | undefined) {
 function packageFramework(context: PackageContext): Framework {
   const manifest = context.fileSystem.host.readFile(path.join(context.rootPath, context.directory, "package.json"));
   const packages = dependencyNames(manifest);
-  for (const { sourceFile } of context.files) {
+  let express = packages.includes("express");
+  for (const { sourceFile, discovered } of context.files) {
     for (const statement of sourceFile.getImportDeclarations()) {
-      if (!statement.isTypeOnly()) packages.push(statement.getModuleSpecifierValue());
+      if (statement.isTypeOnly()) continue;
+      const specifier = statement.getModuleSpecifierValue();
+      packages.push(specifier);
+      const namedImports = statement.getNamedImports();
+      if (specifier === "express" && (statement.getDefaultImport() || statement.getNamespaceImport()
+        || namedImports.length === 0 || namedImports.some(item => !item.isTypeOnly()))) express = true;
     }
     for (const statement of sourceFile.getExportDeclarations()) {
       const specifier = statement.getModuleSpecifierValue();
       if (specifier && !statement.isTypeOnly()) packages.push(specifier);
     }
+    if (!express && extractImports(sourceFile, discovered.path).some(occurrence =>
+      occurrence.kind === "require" && occurrence.specifier === "express")) express = true;
   }
   if (packages.some(name => name === "next" || name.startsWith("next/"))) return "nextjs";
   if (packages.some(name => name.startsWith("@nestjs/"))) return "nestjs";
+  if (express) return "express";
   if (packages.some(name => name === "react" || name.startsWith("react/"))) return "react";
   return "generic";
 }
@@ -84,6 +95,8 @@ export function analyzeFramework(context: FrameworkContext): FrameworkAnalysis {
       const result = analyzeNest(entry);
       fileRoles.push(...result.fileRoles);
       routes.push(...result.routes);
+    } else if (entry.framework === "express") {
+      fileRoles.push(...analyzeExpress(entry).fileRoles);
     } else if (entry.framework === "react") {
       for (const file of entry.files) {
         const role = reactRole(file.sourceFile, file.discovered.path);

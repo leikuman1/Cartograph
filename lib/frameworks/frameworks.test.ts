@@ -24,6 +24,7 @@ async function analyzeFixture(files: Readonly<Record<string, string>>) {
 
 const nextPackage = JSON.stringify({ dependencies: { next: "16", react: "19" } });
 const nestPackage = JSON.stringify({ dependencies: { "@nestjs/core": "11", "@nestjs/common": "11" } });
+const expressPackage = JSON.stringify({ dependencies: { express: "5" } });
 const nestMain = `import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 async function bootstrap() {
@@ -51,9 +52,9 @@ function routes(result: Awaited<ReturnType<typeof analyzeRepository>>) {
   return result.routes.map(({ file, method, path: route }) => [file, method, route]);
 }
 
-test("standalone parser detects Next before Nest and React, preserves custom module adapter and imports", async () => {
+test("standalone parser detects Next before Nest, Express and React, preserves custom module adapter and imports", async () => {
   const result = await analyzeFixture({
-    "package.json": JSON.stringify({ dependencies: { next: "16", "@nestjs/core": "11", react: "19" } }),
+    "package.json": JSON.stringify({ dependencies: { next: "16", "@nestjs/core": "11", express: "5", react: "19" } }),
     "app/page.tsx": "import { value } from '../lib/value'; export default function Page(){ return <p>{value}</p> }",
     "lib/value.ts": "export const value = 1;",
   });
@@ -324,6 +325,187 @@ test("Nest omits computed controller/method paths, versioned, custom and All han
     const result = await analyzeFixture(nestFiles(nestMain, controller));
     assert.deepEqual(result.routes, [], controller);
   }
+});
+
+test("Express detects exact dependency names in each dependency section", async () => {
+  for (const section of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+    const result = await analyzeFixture({
+      "package.json": JSON.stringify({ [section]: { express: "5" } }),
+      "routes/users.ts": "export const users = [];",
+    });
+    assert.equal(result.framework, "express", section);
+    assert.deepEqual(result.fileRoles, [{ file: "routes/users.ts", role: "route" }]);
+    assert.deepEqual(result.routes, []);
+    assert.deepEqual(result.frameworkEntries, []);
+  }
+  const generic = await analyzeFixture({
+    "package.json": JSON.stringify({ dependencies: { "express-session": "1", "express/router": "5", "@types/express": "5" } }),
+    "routes/users.ts": "export const users = [];",
+  });
+  assert.equal(generic.framework, "generic");
+  assert.deepEqual(generic.fileRoles, []);
+});
+
+test("Express accepts exact runtime imports and unshadowed literal require calls", async () => {
+  for (const source of [
+    "import express from 'express'; export const app = express();",
+    "import * as express from 'express'; export { express };",
+    "import { Router } from 'express'; export const router = Router();",
+    "import { type Request, Router } from 'express'; export const router = Router();",
+    "import 'express';",
+    "const express = require('express'); module.exports = express();",
+  ]) {
+    const result = await analyzeFixture({ "src/main.ts": source, "src/routes/users.ts": "export const users = [];" });
+    assert.equal(result.framework, "express", source);
+    assert.deepEqual(result.fileRoles, [{ file: "src/routes/users.ts", role: "route" }]);
+    assert.deepEqual(result.routes, []);
+    assert.deepEqual(result.frameworkEntries, []);
+  }
+});
+
+test("Express requires runtime detection evidence rather than directories or lookalike imports", async () => {
+  for (const source of [
+    "export const express = true;",
+    "import type express from 'express';",
+    "import type { Request } from 'express';",
+    "import { type Request } from 'express';",
+    "import express from 'express/router';",
+    "export { Router } from 'express';",
+    "const express = import('express');",
+    "const express = require(`express`);",
+    "const name = 'express'; const express = require(name);",
+    "function load(require) { return require('express'); }",
+    "const require = name => name; const express = require('express');",
+    "import { require } from './loader'; const express = require('express');",
+  ]) {
+    const result = await analyzeFixture({
+      "src/main.ts": source,
+      "src/loader.ts": "export const require = name => name;",
+      "src/routes/users.ts": "export const users = [];",
+    });
+    assert.equal(result.framework, "generic", source);
+    assert.deepEqual(result.fileRoles, [], source);
+    assert.deepEqual(result.routes, []);
+    assert.deepEqual(result.frameworkEntries, []);
+  }
+});
+
+test("Express directory conventions match singular and plural exact segments with the deepest match winning", async () => {
+  const conventions = [
+    ["route", "route"], ["routes", "route"],
+    ["controller", "controller"], ["controllers", "controller"],
+    ["middleware", "middleware"], ["middlewares", "middleware"],
+    ["service", "service"], ["services", "service"],
+    ["model", "model"], ["models", "model"],
+  ] as const;
+  const expected = conventions.map(([directory, role]) => ({ file: `src/${directory}/users.ts`, role }));
+  const nested = [
+    { file: "src/routes/models/user.ts", role: "model" },
+    { file: "src/models/routes/users.ts", role: "route" },
+    { file: "src/controllers/service/internal/middlewares/auth.ts", role: "middleware" },
+    { file: "src/middleware/controllers/internal/controller/users.ts", role: "controller" },
+    { file: "src/middlewares/services/users.ts", role: "service" },
+    { file: "src/route/not-models/users.ts", role: "route" },
+  ] as const;
+  const ordinary = ["src/route.ts", "src/controller.ts", "src/service.ts", "src/model.ts", "src/middleware.ts",
+    "src/user.routes.ts", "src/user.controller.ts", "src/myroutes/users.ts", "src/route-handlers/users.ts",
+    "src/not-models/user.ts", "src/Controllers/users.ts"];
+  const excluded = ["src/routes/users.spec.ts", "src/models/user.d.ts", "src/controllers/tests/user.ts",
+    "src/services/__tests__/user.ts", "src/routes/fixtures/user.ts", "src/middlewares/__mocks__/auth.ts"];
+  const result = await analyzeFixture({
+    "package.json": expressPackage,
+    ...Object.fromEntries([...expected, ...nested].map(({ file }) => [file, "export const value = 1;"])),
+    ...Object.fromEntries([...ordinary, ...excluded].map(file => [file, "export const value = 1;"])),
+  });
+  assert.equal(result.framework, "express");
+  assert.deepEqual(result.fileRoles, [...expected, ...nested].sort((left, right) => left.file < right.file ? -1 : 1));
+  assert.deepEqual(result.routes, []);
+  assert.deepEqual(result.frameworkEntries, []);
+});
+
+test("Express package evidence and conventions do not leak across package boundaries", async () => {
+  const expected = [
+    { file: "packages/api/src/routes/users.ts", role: "route" },
+    { file: "packages/imported/src/models/user.ts", role: "model" },
+    { file: "packages/commonjs/src/services/user.js", role: "service" },
+  ];
+  const result = await analyzeFixture({
+    "package.json": "{}",
+    "src/routes/root.ts": "export const root = true;",
+    "packages/api/package.json": expressPackage,
+    "packages/api/nested/package.json": "{}",
+    "packages/api/nested/src/routes/hidden.ts": "export const hidden = true;",
+    "packages/imported/package.json": "{}",
+    "packages/imported/src/main.ts": "import express from 'express'; export const app = express();",
+    "packages/commonjs/package.json": "{}",
+    "packages/commonjs/src/main.js": "const express = require('express'); module.exports = express();",
+    "packages/plain/package.json": "{}",
+    "packages/plain/src/controllers/user.ts": "export const user = true;",
+    "routes/package.json": expressPackage,
+    "routes/ordinary.ts": "export const ordinary = true;",
+    ...Object.fromEntries(expected.map(({ file }) => [file, "export const value = 1;"])),
+  });
+  assert.equal(result.framework, "express");
+  assert.deepEqual(result.fileRoles, expected.sort((left, right) => left.file < right.file ? -1 : 1));
+  assert.deepEqual(result.routes, []);
+  assert.deepEqual(result.frameworkEntries, []);
+  const parent = await analyzeFixture({
+    "package.json": expressPackage,
+    "src/routes/users.ts": "export const users = [];",
+    "packages/plain/package.json": "{}",
+    "packages/plain/src/routes/ordinary.ts": "export const ordinary = true;",
+  });
+  assert.deepEqual(parent.fileRoles, [{ file: "src/routes/users.ts", role: "route" }]);
+});
+
+test("Express wins over React in the same or separate packages while Nest retains precedence", async () => {
+  const fixtures: Readonly<Record<string, string>>[] = [
+    { "package.json": JSON.stringify({ dependencies: { express: "5", react: "19" } }) },
+    { "package.json": "{}", "packages/api/package.json": expressPackage,
+      "packages/web/package.json": JSON.stringify({ dependencies: { react: "19" } }) },
+  ];
+  for (const files of fixtures) {
+    const prefix = "packages/api/package.json" in files ? "packages/api/" : "";
+    const result = await analyzeFixture({
+      ...files,
+      [`${prefix}src/routes/users.ts`]: "export const users = [];",
+      "packages/web/src/component.tsx": "import React from 'react'; export default () => <p/>;",
+    });
+    assert.equal(result.framework, "express");
+    assert.deepEqual(result.fileRoles, [{ file: `${prefix}src/routes/users.ts`, role: "route" }]);
+    assert.deepEqual(result.routes, []);
+    assert.deepEqual(result.frameworkEntries, []);
+  }
+  const nest = await analyzeFixture({
+    "package.json": JSON.stringify({ dependencies: { "@nestjs/core": "11", express: "5", react: "19" } }),
+    "src/routes/users.ts": "export const users = [];",
+  });
+  assert.equal(nest.framework, "nestjs");
+  assert.deepEqual(nest.fileRoles, []);
+});
+
+test("Express runtime routes stay empty and controllers require explicit imports", async () => {
+  const result = await analyzeFixture({
+    "package.json": expressPackage,
+    "src/main.js": "const express = require('express'); const routes = require('./routes/users'); const app = express(); app.use('/v1', routes); app.get('/health', (req, res) => res.end()); module.exports = app;",
+    "src/routes/users.js": "const { Router } = require('express'); const controller = require('../controllers/users'); const router = Router(); router.get('/:id', controller.find); module.exports = router;",
+    "src/controllers/users.js": "exports.find = (req, res) => res.json({});",
+    "src/controllers/unimported.js": "exports.find = (req, res) => res.json({});",
+    "src/middleware/auth.js": "module.exports = (req, res, next) => next();",
+  });
+  assert.equal(result.framework, "express");
+  assert.deepEqual(result.routes, []);
+  assert.deepEqual(result.frameworkEntries, []);
+  assert.deepEqual(result.edges.map(edge => [edge.source, edge.target]), [
+    ["src/main.js", "src/routes/users.js"],
+    ["src/routes/users.js", "src/controllers/users.js"],
+  ]);
+  for (const { file } of result.fileRoles) {
+    assert.equal(isFrameworkEntry(result.framework, file, result.fileRoles, result.frameworkEntries), false, file);
+  }
+  const insights = buildInsights(result.files, result.edges, result.framework, result.fileRoles, result.frameworkEntries);
+  assert.ok(insights.unimported.some(file => file.path === "src/controllers/unimported.js"));
+  assert.ok(!insights.unimported.some(file => file.path === "src/controllers/users.js"));
 });
 
 test("React is detected from imports, roles require evidence, and generic fallback has no routes", async () => {

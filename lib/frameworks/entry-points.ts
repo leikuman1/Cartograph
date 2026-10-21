@@ -1,6 +1,6 @@
 import { categoryForFile, frameworkSupportsEntries, type FileCategory, type FileRole, type Framework } from "./taxonomy";
 
-const entryRoles = new Set<FileCategory>(["page", "api", "action", "layout", "controller", "module"]);
+const entryRoles = new Set<FileCategory>(["page", "api", "action", "layout", "module"]);
 const entryIndexes = new WeakMap<readonly string[], ReadonlySet<string>>();
 
 export function isFrameworkEntry(
@@ -11,6 +11,7 @@ export function isFrameworkEntry(
 ): boolean {
   const role = categoryForFile(path, fileRoles).id;
   if (role === "test" || role === "declaration") return false;
+  if (role === "controller") return framework === "nestjs";
   if (entryRoles.has(role)) return true;
   if (!frameworkSupportsEntries(framework)) return false;
   // Only the adapter knows the package and active root. The browser consumes

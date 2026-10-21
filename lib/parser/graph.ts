@@ -54,6 +54,7 @@ export function buildGraph(
       ...file,
       fanIn: fanIn.get(file.path) ?? 0,
       fanOut: fanOut.get(file.path) ?? 0,
+      exports: file.exports ?? [],
     }))
     .sort((left, right) => compareText(left.path, right.path));
 

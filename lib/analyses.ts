@@ -1,6 +1,6 @@
 import "server-only";
 
-import { validateAnalysisResult } from "@/lib/parser/serialization";
+import { validateStoredAnalysisResult } from "@/lib/parser/serialization";
 import type { AnalysisResult } from "@/lib/parser/contract";
 import type { AnalysisSummary } from "@/lib/pipeline/types";
 import { createSupabaseClient } from "@/lib/supabase/server";
@@ -72,10 +72,10 @@ export async function readProgress(ids: readonly string[]) {
 // the expected run instead of mixing its files with the previous graph.
 export async function loadAnalysisResult(id: string, runId: string): Promise<AnalysisResult | null> {
   const supabase = await ensureOrganization();
-  const { data, error } = await supabase.rpc("read_analysis_result_v2", {
+  const { data, error } = await supabase.rpc("read_analysis_result_v3", {
     p_analysis_id: id,
     p_run_id: runId,
   });
   if (error) throw new Error("The stored graph could not be loaded.", { cause: error });
-  return data === null ? null : validateAnalysisResult(data);
+  return data === null ? null : validateStoredAnalysisResult(data);
 }

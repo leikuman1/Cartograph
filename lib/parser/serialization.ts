@@ -19,6 +19,7 @@ import type {
   SkippedFileReason,
 } from "./contract";
 import { buildGraph } from "./graph";
+import { compareCodePoints } from "./text-order";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -86,7 +87,7 @@ function readRepositoryPath(value: unknown, context: string, allowRoot = false) 
 }
 
 function readImportKind(value: unknown, context: string): ImportKind {
-  if (value === "import" || value === "re-export" || value === "dynamic-import") return value;
+  if (value === "import" || value === "re-export" || value === "dynamic-import" || value === "require") return value;
   return fail(context, "unknown import kind");
 }
 
@@ -125,6 +126,7 @@ function readFileNode(value: unknown, context: string): FileNode {
     "contentHash",
     "fanIn",
     "fanOut",
+    ...("exports" in record ? ["exports"] : []),
   ]);
   const contentHash = readString(record.contentHash, `${context}.contentHash`);
   if (!/^[0-9a-f]{64}$/.test(contentHash)) fail(`${context}.contentHash`, "expected a SHA-256 hex digest");
@@ -136,6 +138,8 @@ function readFileNode(value: unknown, context: string): FileNode {
     contentHash,
     fanIn: readInteger(record.fanIn, `${context}.fanIn`),
     fanOut: readInteger(record.fanOut, `${context}.fanOut`),
+    exports: "exports" in record ? readArray(record.exports, `${context}.exports`)
+      .map((name, index) => readString(name, `${context}.exports[${index}]`)) : [],
   };
 }
 
@@ -294,8 +298,18 @@ function compareText(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function compareEdges(left: GraphEdge, right: GraphEdge) {
-  return compareText(left.source, right.source) || compareText(left.target, right.target);
+type TextOrder = (left: string, right: string) => number;
+
+function compareEdges(left: GraphEdge, right: GraphEdge, text: TextOrder = compareText) {
+  return text(left.source, right.source) || text(left.target, right.target);
+}
+
+function compareFileRoles(left: FileRoleRecord, right: FileRoleRecord, text: TextOrder = compareText) {
+  return text(left.file, right.file) || text(left.role, right.role);
+}
+
+function compareRoutes(left: HttpRoute, right: HttpRoute, text: TextOrder = compareText) {
+  return text(left.file, right.file) || text(left.method, right.method) || text(left.path, right.path);
 }
 
 function compareImports(left: ImportRecord, right: ImportRecord) {
@@ -363,6 +377,10 @@ function assertInvariants(result: AnalysisResult) {
   assertUnique(fileCoverage.skippedFiles.map(file => file.path), "coverage.files.skippedFiles");
   assertUnique(fileCoverage.excludedDirectories.map(directory => directory.path), "coverage.files.excludedDirectories");
 
+  for (const file of result.files) {
+    assertSorted(file.exports, compareCodePoints, `files.${file.path}.exports`);
+    assertUnique(file.exports, `files.${file.path}.exports`);
+  }
   const filePaths = new Set(result.files.map(file => file.path));
   assertSorted(result.frameworkEntries, compareText, "frameworkEntries");
   assertUnique(result.frameworkEntries, "frameworkEntries");
@@ -373,14 +391,13 @@ function assertInvariants(result: AnalysisResult) {
     if (!filePaths.has(file)) fail("frameworkEntries", `file ${file} is not parsed`);
   }
   const roleCategories = new Set(categoriesForFramework(result.framework).map(category => category.id));
-  assertSorted(result.fileRoles, (left, right) => compareText(left.file, right.file) || compareText(left.role, right.role), "fileRoles");
+  assertSorted(result.fileRoles, compareFileRoles, "fileRoles");
   assertUnique(result.fileRoles.map(record => record.file), "fileRoles");
   for (const record of result.fileRoles) {
     if (!filePaths.has(record.file)) fail("fileRoles", `file ${record.file} is not parsed`);
     if (!roleCategories.has(record.role)) fail("fileRoles", `role ${record.role} does not belong to this framework`);
   }
-  assertSorted(result.routes, (left, right) => compareText(left.file, right.file)
-    || compareText(left.method, right.method) || compareText(left.path, right.path), "routes");
+  assertSorted(result.routes, compareRoutes, "routes");
   assertUnique(result.routes.map(route => `${route.file}\0${route.method}\0${route.path}`), "routes");
   if (!frameworkSupportsRoutes(result.framework) && result.routes.length > 0) fail("routes", "this framework cannot have routes");
   const filesByPath = new Map(result.files.map(file => [file.path, file]));
@@ -435,7 +452,7 @@ function assertInvariants(result: AnalysisResult) {
   }
 }
 
-export function validateAnalysisResult(value: unknown): AnalysisResult {
+function readAnalysisShape(value: unknown): AnalysisResult {
   const record = readRecord(value, "root");
   // Phase 7 has no framework block; earlier phase 8 snapshots lack only the
   // special-entry list. A present list always requires the complete block.
@@ -457,6 +474,37 @@ export function validateAnalysisResult(value: unknown): AnalysisResult {
     imports: readArray(record.imports, "imports").map((item, index) => readImportRecord(item, `imports[${index}]`)),
     coverage: readCoverage(record.coverage, "coverage"),
   };
+  return result;
+}
+
+export function validateAnalysisResult(value: unknown): AnalysisResult {
+  const result = readAnalysisShape(value);
+  assertInvariants(result);
+  return result;
+}
+
+export function prepareAnalysisForStorage(value: AnalysisResult): AnalysisResult {
+  const result = validateAnalysisResult(value);
+  // The writer validates this stored array in C order; graph edge order stays intact.
+  result.frameworkEntries.sort(compareCodePoints);
+  return result;
+}
+
+export function validateStoredAnalysisResult(value: unknown): AnalysisResult {
+  const result = readAnalysisShape(value);
+  // The RPC reconstructs only these row arrays in PostgreSQL C order. Validate
+  // that transport order before restoring the parser's existing UTF-16 contract.
+  assertSorted(result.files, (left, right) => compareCodePoints(left.path, right.path), "files");
+  assertSorted(result.edges, (left, right) => compareEdges(left, right, compareCodePoints), "edges");
+  assertSorted(result.fileRoles, (left, right) => compareFileRoles(left, right, compareCodePoints), "fileRoles");
+  assertSorted(result.routes, (left, right) => compareRoutes(left, right, compareCodePoints), "routes");
+  // Unlike the reconstructed rows, this array was stored in the writer's C order.
+  assertSorted(result.frameworkEntries, compareCodePoints, "frameworkEntries");
+  result.frameworkEntries.sort(compareText);
+  result.files.sort((left, right) => compareText(left.path, right.path));
+  result.edges.sort(compareEdges);
+  result.fileRoles.sort(compareFileRoles);
+  result.routes.sort(compareRoutes);
   assertInvariants(result);
   return result;
 }
