@@ -1,16 +1,18 @@
 // Browser-safe vocabulary. Detection and syntax extraction live in the adapters.
-export const FRAMEWORKS = ["nextjs", "nestjs", "react", "generic"] as const;
+export const FRAMEWORKS = ["nextjs", "nestjs", "express", "react", "generic"] as const;
 export type Framework = (typeof FRAMEWORKS)[number];
 
 export const FRAMEWORK_LABELS: Record<Framework, string> = {
   nextjs: "Next.js",
   nestjs: "NestJS",
+  express: "Express",
   react: "React",
   generic: "Not detected",
 };
 
 export const FILE_ROLES = [
   "page", "api", "action", "layout", "controller", "service", "module", "entity", "component", "hook",
+  "route", "model", "middleware",
 ] as const;
 export type FileRole = (typeof FILE_ROLES)[number];
 export type FileCategory = FileRole | "source" | "test" | "declaration";
@@ -33,6 +35,9 @@ const definitions: Record<FileCategory, CategoryDefinition> = {
   entity: { id: "entity", label: "Entities", code: "E", description: "Entity files" },
   component: { id: "component", label: "Components", code: "C", description: "React component files" },
   hook: { id: "hook", label: "Hooks", code: "H", description: "React hook files" },
+  route: { id: "route", label: "Routes", code: "R", description: "Files in Express route directories" },
+  model: { id: "model", label: "Models", code: "M", description: "Files in Express model directories" },
+  middleware: { id: "middleware", label: "Middleware", code: "M", description: "Files in Express middleware directories" },
   source: { id: "source", label: "Source", code: "S", description: "Source files with no framework role" },
   test: { id: "test", label: "Tests", code: "T", description: "Test files" },
   declaration: { id: "declaration", label: "Declarations", code: "D", description: "Type declaration files" },
@@ -42,6 +47,7 @@ const generic: readonly CategoryDefinition[] = [definitions.source, definitions.
 const categories: Record<Framework, readonly CategoryDefinition[]> = {
   nextjs: [definitions.page, definitions.api, definitions.action, definitions.layout, definitions.component, definitions.hook, ...generic],
   nestjs: [definitions.controller, definitions.service, definitions.module, definitions.entity, ...generic],
+  express: [definitions.route, definitions.controller, definitions.middleware, definitions.service, definitions.model, ...generic],
   react: [definitions.component, definitions.hook, ...generic],
   generic,
 };

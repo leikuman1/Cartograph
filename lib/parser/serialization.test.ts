@@ -12,7 +12,7 @@ function snapshot() {
     routes: [{ file: "src/users.controller.ts", method: "GET", path: "/api/users/:id", line: 3 }],
     files: [{
       path: "src/users.controller.ts", folder: "src", module: ".", lineCount: 10,
-      contentHash: "a".repeat(64), fanIn: 0, fanOut: 0,
+      contentHash: "a".repeat(64), fanIn: 0, fanOut: 0, exports: [],
     }],
     edges: [], imports: [],
     coverage: {
@@ -64,6 +64,71 @@ test("special-entry metadata round-trips and rejects malformed or inconsistent f
   assert.throws(() => validateAnalysisResult({ ...current, frameworkEntries: ["missing.ts"] }), /not parsed/);
   assert.throws(() => validateAnalysisResult({ ...current, frameworkEntries: [...paths, paths[1]] }), /duplicate/);
   assert.throws(() => validateAnalysisResult({ ...current, frameworkEntries: [...paths].reverse() }), /not stably sorted/);
+});
+
+test("CommonJS export names round-trip and old files default to an empty list", () => {
+  const fixture = snapshot();
+  const current = { ...fixture, files: [{ ...fixture.files[0], exports: ["default", "handler"] }] };
+  assert.deepEqual(validateAnalysisResult(JSON.parse(JSON.stringify(current))), current);
+  const { exports: names, ...legacyFile } = current.files[0];
+  assert.deepEqual(names, ["default", "handler"]);
+  assert.deepEqual(validateAnalysisResult({ ...current, files: [legacyFile] }).files[0].exports, []);
+  assert.deepEqual(validateAnalysisResult({ ...current, files: [{ ...legacyFile, exports: ["", "\u{10000}"] }] })
+    .files[0].exports, ["", "\u{10000}"]);
+  assert.throws(() => validateAnalysisResult({ ...current, files: [{ ...legacyFile, exports: ["\u{10000}", ""] }] }), /not stably sorted/);
+  for (const exports of [null, "handler", [1], ["x", "x"], ["z", "a"]]) {
+    assert.throws(() => validateAnalysisResult({ ...current, files: [{ ...legacyFile, exports }] }), /exports/);
+  }
+});
+
+test("Express metadata and CommonJS imports round-trip without routes or special entries", () => {
+  const fixture = snapshot();
+  const fileRoles = [
+    { file: "src/controllers/users.js", role: "controller" },
+    { file: "src/middleware/auth.js", role: "middleware" },
+    { file: "src/models/user.js", role: "model" },
+    { file: "src/routes/users.js", role: "route" },
+    { file: "src/services/users.js", role: "service" },
+  ];
+  const current = {
+    ...fixture,
+    framework: "express",
+    fileRoles,
+    routes: [],
+    files: fileRoles.map(({ file }) => ({
+      ...fixture.files[0], path: file, folder: file.slice(0, file.lastIndexOf("/")),
+      fanIn: file === "src/controllers/users.js" ? 1 : 0,
+      fanOut: file === "src/routes/users.js" ? 1 : 0,
+      exports: file === "src/controllers/users.js" ? ["find"] : [],
+    })),
+    edges: [{ source: "src/routes/users.js", target: "src/controllers/users.js", kinds: ["require"] }],
+    imports: [
+      { source: "src/routes/users.js", specifier: "express", kind: "require", line: 1,
+        resolution: { status: "external", reason: "external-package" } },
+      { source: "src/routes/users.js", specifier: "../controllers/users", kind: "require", line: 2,
+        resolution: { status: "internal", target: "src/controllers/users.js" } },
+    ],
+    coverage: {
+      files: { ...fixture.coverage.files, discovered: 5, parsed: 5 },
+      imports: { discovered: 2, internal: 1, external: 1, excluded: 0, unresolved: 0 },
+    },
+  };
+  assert.deepEqual(validateAnalysisResult(JSON.parse(JSON.stringify(current))), current);
+  const file = fileRoles[0].file;
+  assert.throws(() => validateAnalysisResult({ ...current,
+    routes: [{ file, method: "GET", path: "/users", line: 1 }] }), /cannot have routes/);
+  assert.throws(() => validateAnalysisResult({ ...current, frameworkEntries: [file] }), /cannot have special entries/);
+  assert.throws(() => validateAnalysisResult({ ...current,
+    fileRoles: [{ file: "missing.js", role: "route" }] }), /not parsed/);
+  for (const role of ["page", "api", "component", "hook", "module", "entity"]) {
+    assert.throws(() => validateAnalysisResult({ ...current, fileRoles: [{ file, role }] }), /does not belong/);
+  }
+  assert.throws(() => validateAnalysisResult({ ...current,
+    fileRoles: [{ file, role: "router" }] }), /unknown file role/);
+  assert.throws(() => validateAnalysisResult({ ...current,
+    fileRoles: [fileRoles[0], ...fileRoles] }), /duplicate/);
+  assert.throws(() => validateAnalysisResult({ ...current,
+    fileRoles: [...fileRoles].reverse() }), /not stably sorted/);
 });
 
 test("framework metadata rejects missing files, unsupported roles, and fabricated source locations", () => {

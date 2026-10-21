@@ -269,7 +269,7 @@ begin
     perform private.phase08_reject(v_id, v_run, jsonb_set(v_result, array[v_key], 'null'));
   end loop;
   for v_bad in select value from jsonb_array_elements('[
-    {"framework":"express"}, {"framework":1}, {"framework":{}},
+    {"framework":"unknown-framework"}, {"framework":1}, {"framework":{}},
     {"fileRoles":{}}, {"fileRoles":"[]"}, {"routes":{}}, {"routes":"[]"},
     {"framework":"generic"}, {"framework":"react"}
   ]'::jsonb) loop
@@ -418,7 +418,7 @@ begin
   exception when check_violation then null;
   end;
   begin
-    update public.analyses set framework = 'express' where id = v_id;
+    update public.analyses set framework = 'unknown-framework' where id = v_id;
     raise exception 'An unsupported stored framework was accepted';
   exception when check_violation then null;
   end;

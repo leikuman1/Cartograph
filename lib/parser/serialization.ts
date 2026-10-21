@@ -19,6 +19,7 @@ import type {
   SkippedFileReason,
 } from "./contract";
 import { buildGraph } from "./graph";
+import { compareExportNames } from "./export-names";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -86,7 +87,7 @@ function readRepositoryPath(value: unknown, context: string, allowRoot = false) 
 }
 
 function readImportKind(value: unknown, context: string): ImportKind {
-  if (value === "import" || value === "re-export" || value === "dynamic-import") return value;
+  if (value === "import" || value === "re-export" || value === "dynamic-import" || value === "require") return value;
   return fail(context, "unknown import kind");
 }
 
@@ -125,6 +126,7 @@ function readFileNode(value: unknown, context: string): FileNode {
     "contentHash",
     "fanIn",
     "fanOut",
+    ...("exports" in record ? ["exports"] : []),
   ]);
   const contentHash = readString(record.contentHash, `${context}.contentHash`);
   if (!/^[0-9a-f]{64}$/.test(contentHash)) fail(`${context}.contentHash`, "expected a SHA-256 hex digest");
@@ -136,6 +138,8 @@ function readFileNode(value: unknown, context: string): FileNode {
     contentHash,
     fanIn: readInteger(record.fanIn, `${context}.fanIn`),
     fanOut: readInteger(record.fanOut, `${context}.fanOut`),
+    exports: "exports" in record ? readArray(record.exports, `${context}.exports`)
+      .map((name, index) => readString(name, `${context}.exports[${index}]`)) : [],
   };
 }
 
@@ -363,6 +367,10 @@ function assertInvariants(result: AnalysisResult) {
   assertUnique(fileCoverage.skippedFiles.map(file => file.path), "coverage.files.skippedFiles");
   assertUnique(fileCoverage.excludedDirectories.map(directory => directory.path), "coverage.files.excludedDirectories");
 
+  for (const file of result.files) {
+    assertSorted(file.exports, compareExportNames, `files.${file.path}.exports`);
+    assertUnique(file.exports, `files.${file.path}.exports`);
+  }
   const filePaths = new Set(result.files.map(file => file.path));
   assertSorted(result.frameworkEntries, compareText, "frameworkEntries");
   assertUnique(result.frameworkEntries, "frameworkEntries");

@@ -1,5 +1,6 @@
 import { Node, SyntaxKind, type SourceFile } from "ts-morph";
 import type { ImportKind } from "./contract";
+import { isCommonJsIdentifier } from "./commonjs";
 
 export interface ImportOccurrence {
   source: string;
@@ -43,15 +44,18 @@ export function extractImports(sourceFile: SourceFile, source: string) {
   }
 
   for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-    if (call.getExpression().getKind() !== SyntaxKind.ImportKeyword) continue;
+    const expression = call.getExpression();
+    const dynamicImport = expression.getKind() === SyntaxKind.ImportKeyword;
+    const commonJs = isCommonJsIdentifier(expression, "require");
+    if (!dynamicImport && !commonJs) continue;
     const argument = call.getArguments()[0];
-    const specifier = Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument)
+    const specifier = Node.isStringLiteral(argument) || (dynamicImport && Node.isNoSubstitutionTemplateLiteral(argument))
       ? argument.getLiteralValue()
       : null;
     occurrences.push({
       source,
       specifier,
-      kind: "dynamic-import",
+      kind: commonJs ? "require" : "dynamic-import",
       line: call.getStartLineNumber(),
     });
   }

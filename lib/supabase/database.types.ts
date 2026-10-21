@@ -44,6 +44,7 @@ type FileRow = {
   module: string;
   line_count: number;
   content_hash: string;
+  export_names: string[];
   fan_in: number;
   fan_out: number;
   created_at: string;
@@ -130,6 +131,10 @@ export type Database = {
         Returns: unknown;
       };
       read_analysis_result_v2: {
+        Args: { p_analysis_id: string; p_run_id: string };
+        Returns: unknown;
+      };
+      read_analysis_result_v3: {
         Args: { p_analysis_id: string; p_run_id: string };
         Returns: unknown;
       };

@@ -72,7 +72,7 @@ export async function readProgress(ids: readonly string[]) {
 // the expected run instead of mixing its files with the previous graph.
 export async function loadAnalysisResult(id: string, runId: string): Promise<AnalysisResult | null> {
   const supabase = await ensureOrganization();
-  const { data, error } = await supabase.rpc("read_analysis_result_v2", {
+  const { data, error } = await supabase.rpc("read_analysis_result_v3", {
     p_analysis_id: id,
     p_run_id: runId,
   });

@@ -103,10 +103,13 @@ Authenticated users call narrow
 for organization registration and starting/rerunning an analysis. These require a
 user and active organization from the signed token, use a fixed search path, and
 are unavailable to anonymous users. Stage, failure, and graph-storage RPCs are
-service-role only. Both graph-read RPCs run with the caller's existing RLS policies
-and return one consistent completed-run snapshot. `read_analysis_result` preserves
-the exact five-key phase 7 response; new callers use `read_analysis_result_v2` for
-framework roles, routes and special Next.js entry files. Both keep `schemaVersion: 1`.
+service-role only. Versioned graph-read RPCs run with the caller's existing RLS
+policies and return one consistent completed-run snapshot. `read_analysis_result`
+preserves the exact five-key phase 7 response; `read_analysis_result_v2` preserves
+the phase 8 contract for framework roles, routes and special Next.js entry files.
+Phase 9 callers use `read_analysis_result_v3` for CommonJS exports, `require()`
+imports and Express roles. Earlier reader contracts stay stable; all keep
+`schemaVersion: 1`.
 
 ## Organization synchronization without webhooks
 
@@ -201,7 +204,10 @@ Expand folders into paginated file rows, select a file to highlight its imports
 and importers, or inspect the Files table. The detail panel shows direct
 connections and two-step traversals; category filtering and graph insights use
 the same stored parser output. Escape or a background click clears selection.
-Framework detection runs in fixed order: Next.js, NestJS, then React. The sidebar
+Framework detection runs in fixed order: Next.js, NestJS, Express, then React.
+Detection and roles stay inside the nearest package boundary. Express requires an
+exact `express` dependency, a non-type static import, or an unshadowed literal
+`require('express')`; directory names alone do not detect a framework. The sidebar
 uses each framework's concrete roles in a fixed reading order; unmatched files
 keep Source, Tests, or Declarations. Unmatched repositories render normally with
 an empty Routes table. Older analyses need an explicit rerun to populate these
@@ -215,17 +221,33 @@ facts. Pages Router API handlers retain their role but produce no route rows,
 since a method check in a function cannot prove which methods it serves.
 Dynamic configuration, unknown prefixes, and unsupported routing syntax also
 produce no routes. React has file roles without an inferred routing system.
-Framework adapters reuse parsed syntax; no repository code is executed.
+Express assigns roles from exact package-relative directory segments:
+`route`/`routes`, `controller`/`controllers`, `middleware`/`middlewares`,
+`service`/`services`, and `model`/`models`. The deepest matching directory wins;
+filenames do not establish roles, and tests and declarations keep their generic
+categories. Express categories read Routes, Controllers, Middleware, Services,
+Models, then the generic categories. Express routes and special framework entries
+are always empty; controllers require explicit imports to leave the unimported
+file list. Framework adapters reuse parsed syntax; no repository code is executed.
 
-Apply every migration with `pnpm db:migrate` before starting the new app, including
-`20261021020000_phase08_review_metadata.sql`; the earlier phase 8 migration was
-already applied and remains unchanged. Run `pnpm db:verify` to check metadata
-storage, both reader contracts and RLS. Rolling the app back to phase 7 works with
-the database still upgraded: the original reader retains its exact response and
-old writers clear framework metadata. An older phase 8 app still calling the
-original reader temporarily shows generic metadata until the updated caller is
-restarted. Existing analyses need an explicit rerun to collect special Next.js
-entry files; migration does not invent that evidence.
+Phase 9 collects string-literal `require()` calls alongside existing imports,
+re-exports and dynamic imports, resolving them through the same module resolver.
+Mixed module syntax retains both kinds on one dependency edge. Nonliteral
+`require()` calls remain excluded with a reason and count toward import coverage;
+locally shadowed `require` calls are ordinary function calls. Stored files also
+carry CommonJS export names from direct top-level assignments: literal properties
+on `exports` or `module.exports`, object-literal keys, and `default` for a whole
+value export. Dynamic keys and spread names are omitted; replacements and the
+`exports` alias are tracked in statement order. Existing import-only edge lists
+retain their ordering and content.
+
+Apply every migration with `pnpm db:migrate` before starting the phase 9 app. A
+later migration adds the v3 reader and CommonJS/Express storage without changing
+already applied migrations or the legacy and v2 reader contracts. Run
+`pnpm db:verify` to check storage, all reader contracts and RLS. Rolling the app
+back preserves the earlier readers' response shapes. Existing analyses need an
+explicit rerun to collect CommonJS dependencies, export names and Express roles;
+migration does not invent that evidence.
 
 The parser also remains usable without the app:
 
@@ -247,8 +269,9 @@ pnpm db:verify
 pnpm db:advisors
 ```
 
-Run the browser acceptance check in `docs/specs/phrase-08.md` manually. The phase
-7 progress checks, including watching progress from a second tab, remain manual.
+Run the phase 9 browser acceptance check in `docs/specs/phrase-09.md` manually.
+The phase 8 framework checks and phase 7 progress checks, including watching
+progress from a second tab, remain manual.
 The workspace derives its organization from the server session, and switching
 teams refreshes that state. Theme choices
 are saved in local storage; system mode follows OS changes.
