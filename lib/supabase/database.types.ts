@@ -32,6 +32,7 @@ type AnalysisRow = {
   import_records: unknown;
   schema_version: number | null;
   framework: Framework;
+  framework_entries: unknown;
 };
 
 type FileRow = {
@@ -125,6 +126,10 @@ export type Database = {
         Returns: StartAnalysisResult[];
       };
       read_analysis_result: {
+        Args: { p_analysis_id: string; p_run_id: string };
+        Returns: unknown;
+      };
+      read_analysis_result_v2: {
         Args: { p_analysis_id: string; p_run_id: string };
         Returns: unknown;
       };

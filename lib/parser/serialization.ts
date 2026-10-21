@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { categoriesForFramework, FILE_ROLES, FRAMEWORKS, frameworkSupportsRoutes, type FileRole, type Framework } from "../frameworks/taxonomy";
+import { categoriesForFramework, FILE_ROLES, FRAMEWORKS, frameworkSupportsEntries, frameworkSupportsRoutes, type FileRole, type Framework } from "../frameworks/taxonomy";
 import type {
   AnalysisCoverage,
   AnalysisResult,
@@ -364,6 +364,14 @@ function assertInvariants(result: AnalysisResult) {
   assertUnique(fileCoverage.excludedDirectories.map(directory => directory.path), "coverage.files.excludedDirectories");
 
   const filePaths = new Set(result.files.map(file => file.path));
+  assertSorted(result.frameworkEntries, compareText, "frameworkEntries");
+  assertUnique(result.frameworkEntries, "frameworkEntries");
+  if (!frameworkSupportsEntries(result.framework) && result.frameworkEntries.length > 0) {
+    fail("frameworkEntries", "this framework cannot have special entries");
+  }
+  for (const file of result.frameworkEntries) {
+    if (!filePaths.has(file)) fail("frameworkEntries", `file ${file} is not parsed`);
+  }
   const roleCategories = new Set(categoriesForFramework(result.framework).map(category => category.id));
   assertSorted(result.fileRoles, (left, right) => compareText(left.file, right.file) || compareText(left.role, right.role), "fileRoles");
   assertUnique(result.fileRoles.map(record => record.file), "fileRoles");
@@ -429,16 +437,20 @@ function assertInvariants(result: AnalysisResult) {
 
 export function validateAnalysisResult(value: unknown): AnalysisResult {
   const record = readRecord(value, "root");
-  // Phase 7 snapshots have none of these fields. Partial new metadata is an
-  // invalid snapshot, rather than a legacy result whose facts can be discarded.
+  // Phase 7 has no framework block; earlier phase 8 snapshots lack only the
+  // special-entry list. A present list always requires the complete block.
   const metadataKeys = ["framework", "fileRoles", "routes"];
-  const hasMetadata = metadataKeys.some(key => key in record);
-  assertKeys(record, "root", ["schemaVersion", "files", "edges", "imports", "coverage", ...(hasMetadata ? metadataKeys : [])]);
+  const hasEntries = "frameworkEntries" in record;
+  const hasMetadata = hasEntries || metadataKeys.some(key => key in record);
+  assertKeys(record, "root", ["schemaVersion", "files", "edges", "imports", "coverage",
+    ...(hasMetadata ? metadataKeys : []), ...(hasEntries ? ["frameworkEntries"] : [])]);
   if (record.schemaVersion !== 1) fail("root.schemaVersion", "expected version 1");
   const result: AnalysisResult = {
     schemaVersion: 1,
     framework: hasMetadata ? readFramework(record.framework) : readFramework("generic"),
     fileRoles: hasMetadata ? readArray(record.fileRoles, "fileRoles").map((item, index) => readFileRole(item, `fileRoles[${index}]`)) : [],
+    frameworkEntries: hasEntries ? readArray(record.frameworkEntries, "frameworkEntries")
+      .map((item, index) => readRepositoryPath(item, `frameworkEntries[${index}]`)) : [],
     routes: hasMetadata ? readArray(record.routes, "routes").map((item, index) => readHttpRoute(item, `routes[${index}]`)) : [],
     files: readArray(record.files, "files").map((item, index) => readFileNode(item, `files[${index}]`)),
     edges: readArray(record.edges, "edges").map((item, index) => readGraphEdge(item, `edges[${index}]`)),

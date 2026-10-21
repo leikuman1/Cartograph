@@ -1,19 +1,24 @@
-import { categoryForFile, type FileCategory, type FileRole, type Framework } from "./taxonomy";
+import { categoryForFile, frameworkSupportsEntries, type FileCategory, type FileRole, type Framework } from "./taxonomy";
 
 const entryRoles = new Set<FileCategory>(["page", "api", "action", "layout", "controller", "module"]);
-// These conventions are file locations within a detected app, never basenames
-// that could turn ordinary modules such as lib/error.ts into entry points.
-const appEntry = /^(src\/)?app\/(.*\/)?(template|default|loading|error|global-error|not-found)\.[jt]sx?$/;
-const rootEntry = /^(src\/)?(middleware|proxy|instrumentation)\.[jt]sx?$/;
-const pagesEntry = /^(src\/)?pages\/(_app|_document|_error)\.[jt]sx?$/;
+const entryIndexes = new WeakMap<readonly string[], ReadonlySet<string>>();
 
 export function isFrameworkEntry(
   framework: Framework,
   path: string,
   fileRoles: readonly { file: string; role: FileRole }[],
+  frameworkEntries: readonly string[],
 ): boolean {
   const role = categoryForFile(path, fileRoles).id;
   if (role === "test" || role === "declaration") return false;
   if (entryRoles.has(role)) return true;
-  return framework === "nextjs" && (appEntry.test(path) || rootEntry.test(path) || pagesEntry.test(path));
+  if (!frameworkSupportsEntries(framework)) return false;
+  // Only the adapter knows the package and active root. The browser consumes
+  // its exact facts instead of inferring conventions from repository paths.
+  let entries = entryIndexes.get(frameworkEntries);
+  if (!entries) {
+    entries = new Set(frameworkEntries);
+    entryIndexes.set(frameworkEntries, entries);
+  }
+  return entries.has(path);
 }

@@ -7,7 +7,7 @@ import { createSupabaseClient } from "@/lib/supabase/server";
 
 const ANALYSIS_LIMIT = 50;
 
-const SUMMARY_COLUMNS = "id, status, is_seed, created_at, started_at, completed_at, error_message, stage, stage_message, updated_at, failed_stage, commit_sha, run_id, project:projects(name, repository_url)";
+const SUMMARY_COLUMNS = "id, status, is_seed, created_at, started_at, completed_at, error_message, stage, stage_message, updated_at, failed_stage, commit_sha, run_id, project:projects(name, repository_url, canonical_repository_url)";
 
 async function ensureOrganization() {
   const supabase = await createSupabaseClient();
@@ -72,7 +72,7 @@ export async function readProgress(ids: readonly string[]) {
 // the expected run instead of mixing its files with the previous graph.
 export async function loadAnalysisResult(id: string, runId: string): Promise<AnalysisResult | null> {
   const supabase = await ensureOrganization();
-  const { data, error } = await supabase.rpc("read_analysis_result", {
+  const { data, error } = await supabase.rpc("read_analysis_result_v2", {
     p_analysis_id: id,
     p_run_id: runId,
   });

@@ -744,6 +744,10 @@ declare
   rerun record;
 begin
   result := public.read_analysis_result(target, active_run);
+  if (select array_agg(key order by key collate "C") from jsonb_object_keys(result) root(key))
+    is distinct from array['coverage', 'edges', 'files', 'imports', 'schemaVersion'] then
+    raise exception 'The legacy snapshot response shape changed';
+  end if;
   if result is null or jsonb_array_length(result -> 'files') <> 1003
     or jsonb_array_length(result -> 'edges') <> 1001
     or jsonb_array_length(result -> 'imports') <> 1001 then

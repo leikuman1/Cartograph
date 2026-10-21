@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ts } from "ts-morph";
+import { buildInsights, entryExclusionCounts } from "../canvas/insights";
+import { isFrameworkEntry } from "./entry-points";
 import { analyzeRepository } from "../parser";
 
 async function analyzeFixture(files: Readonly<Record<string, string>>) {
@@ -131,6 +133,113 @@ test("Next route directories respect nearest package and root routing directory 
   assert.ok(!result.fileRoles.some(item => item.file.startsWith("packages/plain/") || item.file.startsWith("packages/web/nested/")));
 });
 
+test("Next special conventions are exact parsed entries, while ordinary modules remain unimported", async () => {
+  const component = "export default function Component(){ return <p/> }";
+  const entries = [
+    "app/default.tsx", "app/error.tsx", "app/global-error.tsx", "app/global-not-found.tsx",
+    "app/loading.tsx", "app/not-found.tsx", "app/template.tsx",
+    "app/forbidden.tsx", "app/unauthorized.tsx", "app/account/forbidden.tsx",
+    "app/(shop)/account/loading.tsx", "app/@modal/default.tsx", "app/(.)photo/error.tsx",
+    "app/robots.ts", "app/manifest.ts", "app/sitemap.ts", "app/products/sitemap.ts",
+    "pages/_app.tsx", "pages/_document.tsx", "pages/_error.tsx",
+    "middleware.ts", "instrumentation.ts",
+  ];
+  const ordinary = ["lib/app/error.tsx", "lib/app/loading.tsx", "lib/proxy.ts", "lib/middleware.ts",
+    "app/_private/error.tsx", "app/_private/sitemap.ts", "app/nested/robots.ts", "app/nested/manifest.ts",
+    "app/nested/global-error.tsx", "app/nested/global-not-found.tsx", "pages/nested/_app.tsx"];
+  const result = await analyzeFixture({
+    "package.json": nextPackage,
+    "next.config.ts": "export default { experimental: { authInterrupts: true, globalNotFound: true } };",
+    ...Object.fromEntries([...entries, ...ordinary].map(file => [file, file === "middleware.ts"
+      ? "export { handler as middleware } from './lib/handler';" : file === "instrumentation.ts"
+        ? "export const enabled = true;" : file.endsWith(".ts") ? "export default function entry(){ return [] }" : component])),
+    "lib/handler.ts": "export function handler() {}",
+    "app/page.tsx": component,
+    "app/layout.tsx": component,
+    "app/api/route.ts": "export function GET() {}",
+    "app/missing-export/error.tsx": "export const value = 1;",
+    "app/reexport/error.tsx": "export { default } from '../../lib-component';",
+    "lib-component.tsx": component,
+    "app/ignored/error.tsx": component,
+    ".gitignore": "app/ignored/\n",
+    "app/error.test.tsx": component,
+  });
+  const expected = [...entries, "app/reexport/error.tsx"].sort();
+  assert.deepEqual(result.frameworkEntries, expected);
+  for (const file of [...expected, "app/page.tsx", "app/layout.tsx", "app/api/route.ts"]) {
+    assert.equal(isFrameworkEntry(result.framework, file, result.fileRoles, result.frameworkEntries), true, file);
+  }
+  const insights = buildInsights(result.files, result.edges, result.framework, result.fileRoles, result.frameworkEntries);
+  assert.ok(expected.every(file => !insights.unimported.some(item => item.path === file)));
+  assert.ok(ordinary.every(file => insights.unimported.some(item => item.path === file)));
+  assert.ok(insights.unimported.some(file => file.path === "app/missing-export/error.tsx"));
+  const exclusions = entryExclusionCounts(result.files.filter(file => file.fanIn === 0), result.framework,
+    result.fileRoles, result.frameworkEntries);
+  assert.equal(exclusions["framework-entry"], expected.length + 3);
+});
+
+test("Next entries stay within the nearest Next package and active app, pages and hook roots", async () => {
+  const component = "export default () => <p/>;";
+  const entries = ["packages/web/app/error.tsx", "packages/web/app/robots.ts", "packages/web/pages/_app.tsx",
+    "packages/web/proxy.ts", "packages/src-web/src/app/loading.tsx", "packages/src-web/src/pages/_document.tsx",
+    "packages/src-web/src/middleware.ts", "packages/src-web/src/instrumentation.ts"];
+  const ordinary = ["app/error.tsx", "proxy.ts", "packages/web/lib/app/error.tsx", "packages/web/lib/proxy.ts",
+    "packages/web/src/app/error.tsx", "packages/web/src/pages/_app.tsx", "packages/web/src/proxy.ts",
+    "packages/web/nested/app/error.tsx", "packages/web/nested/proxy.ts", "packages/plain/app/error.tsx",
+    "packages/src-web/app-other/error.tsx", "packages/src-web/middleware.ts"];
+  const result = await analyzeFixture({
+    "package.json": "{}",
+    "packages/web/package.json": nextPackage,
+    "packages/web/nested/package.json": "{}",
+    "packages/plain/package.json": "{}",
+    "packages/src-web/package.json": nextPackage,
+    ...Object.fromEntries([...entries, ...ordinary].map(file => [file,
+      file.endsWith(".ts") ? "export default function entry(){ return [] }" : component])),
+  });
+  assert.deepEqual(result.frameworkEntries, [...entries].sort());
+  const insights = buildInsights(result.files, result.edges, result.framework, result.fileRoles, result.frameworkEntries);
+  assert.ok(ordinary.every(file => insights.unimported.some(item => item.path === file)));
+});
+
+test("Next metadata image variants allow only a single optional digit and require a default export", async () => {
+  const images = ["icon", "apple-icon", "opengraph-image", "twitter-image"];
+  const entries = images.flatMap(name => ["", "0", "9"].flatMap(number => ["app", "app/nested"]
+    .map(directory => `${directory}/${name}${number}.tsx`)));
+  const ordinary = images.flatMap(name => [`app/${name}10.tsx`, `app/${name}01.tsx`,
+    `app/${name}-extra.tsx`, `app/no-export/${name}1.tsx`, `app/_private/${name}2.tsx`]);
+  const result = await analyzeFixture({
+    "package.json": nextPackage,
+    ...Object.fromEntries([...entries, ...ordinary].map(file => [file, file.includes("/no-export/")
+      ? "export function generateImageMetadata(){ return [] }" : "export default function image(){ return new Response() }"])),
+    "app/robots.txt": "User-agent: *",
+    "app/icon.png": "not a parsed source file",
+  });
+  assert.deepEqual(result.frameworkEntries, [...entries].sort());
+  assert.ok(result.coverage.files.skippedFiles.some(file => file.path === "app/icon.png"));
+});
+
+test("Next experimental special entries require literal flags without executing config", async () => {
+  const files = { "package.json": nextPackage, "app/forbidden.tsx": "export default () => <p/>;",
+    "app/unauthorized.tsx": "export default () => <p/>;", "app/global-not-found.tsx": "export default () => <p/>;",
+    "app/page.tsx": "export default () => <p/>;" };
+  for (const config of [undefined, "export default {};", "export default {experimental: {authInterrupts: false, globalNotFound: false}};",
+    "export default {experimental: {authInterrupts: process.env.ENABLED, globalNotFound: process.env.ENABLED}};",
+    "export default {experimental: {...settings, authInterrupts: true, globalNotFound: true}};",
+    "export default {experimental: {authInterrupts: true, globalNotFound: true, [key]: false}};",
+    "export default withPlugin({experimental: {authInterrupts: true, globalNotFound: true}});"]) {
+    const result = await analyzeFixture({ ...files, ...(config ? { "next.config.ts": config } : {}) });
+    assert.deepEqual(result.frameworkEntries, [], config);
+  }
+  for (const config of [
+    "const config = {experimental: {'authInterrupts': true, 'globalNotFound': true}}; export default config;",
+    "module.exports = {experimental: {authInterrupts: true, globalNotFound: true}};",
+  ]) {
+    const result = await analyzeFixture({ ...files, "next.config.ts": config });
+    assert.deepEqual(result.frameworkEntries, ["app/forbidden.tsx", "app/global-not-found.tsx", "app/unauthorized.tsx"]);
+    assert.deepEqual(routes(result), [["app/page.tsx", "GET", "/"]]);
+  }
+});
+
 test("Next path-changing and opaque config omits routes while retaining roles", async () => {
   for (const config of [
     "export default { basePath: '/docs' };",
@@ -227,12 +336,15 @@ test("React is detected from imports, roles require evidence, and generic fallba
   assert.equal(result.framework, "react");
   assert.deepEqual(result.fileRoles, [{ file: "src/component.tsx", role: "component" }, { file: "src/useValue.ts", role: "hook" }]);
   assert.deepEqual(result.routes, []);
+  assert.deepEqual(result.frameworkEntries, []);
   const generic = await analyzeFixture({ "package.json": "not json", "app/page.tsx": "export default () => <p/>;" });
   assert.equal(generic.framework, "generic");
   assert.deepEqual(generic.fileRoles, []);
   assert.deepEqual(generic.routes, []);
+  assert.deepEqual(generic.frameworkEntries, []);
   const nest = await analyzeFixture({ "package.json": JSON.stringify({ dependencies: { "@nestjs/core": "11", react: "19" } }) });
   assert.equal(nest.framework, "nestjs");
+  assert.deepEqual(nest.frameworkEntries, []);
 });
 
 test("framework manifest reads stay confined and never follow package symlinks", async () => {

@@ -18,15 +18,15 @@ begin
   if not has_function_privilege('service_role', 'public.store_analysis(uuid,uuid,jsonb)', 'EXECUTE')
     or has_function_privilege('anon', 'public.store_analysis(uuid,uuid,jsonb)', 'EXECUTE')
     or has_function_privilege('authenticated', 'public.store_analysis(uuid,uuid,jsonb)', 'EXECUTE')
-    or not has_function_privilege('authenticated', 'public.read_analysis_result(uuid,uuid)', 'EXECUTE')
-    or has_function_privilege('anon', 'public.read_analysis_result(uuid,uuid)', 'EXECUTE') then
+    or not has_function_privilege('authenticated', 'public.read_analysis_result_v2(uuid,uuid)', 'EXECUTE')
+    or has_function_privilege('anon', 'public.read_analysis_result_v2(uuid,uuid)', 'EXECUTE') then
     raise exception 'Framework RPC privileges are incorrect';
   end if;
   if not exists (
     select 1 from pg_proc where oid = 'public.store_analysis(uuid,uuid,jsonb)'::regprocedure
       and prosecdef and proconfig @> array['search_path=""']
   ) or not exists (
-    select 1 from pg_proc where oid = 'public.read_analysis_result(uuid,uuid)'::regprocedure
+    select 1 from pg_proc where oid = 'public.read_analysis_result_v2(uuid,uuid)'::regprocedure
       and not prosecdef and provolatile = 's' and proconfig @> array['search_path=""']
   ) then
     raise exception 'Storage definer or stable RLS snapshot security changed';
@@ -202,7 +202,7 @@ do $$
 declare
   v_id uuid := current_setting('cartograph.phase08_id')::uuid;
   v_run uuid := current_setting('cartograph.phase08_run')::uuid;
-  v_result jsonb := public.read_analysis_result(v_id, v_run);
+  v_result jsonb := public.read_analysis_result_v2(v_id, v_run);
   v_rerun record;
 begin
   if v_result is null or v_result ->> 'framework' <> 'nextjs' or v_result -> 'schemaVersion' <> '1'::jsonb
@@ -223,16 +223,16 @@ begin
     or v_result #>> '{coverage,files,parsed}' <> '3' then
     raise exception 'Framework storage lost graph data';
   end if;
-  if public.read_analysis_result(v_id, gen_random_uuid()) is not null then
+  if public.read_analysis_result_v2(v_id, gen_random_uuid()) is not null then
     raise exception 'Framework metadata was exposed for a wrong run';
   end if;
   perform set_config('request.jwt.claims',
     '{"role":"authenticated","sub":"user_phase08","o":{"id":"org_phase08_fixture_b"}}', true);
-  if public.read_analysis_result(v_id, v_run) is not null then
+  if public.read_analysis_result_v2(v_id, v_run) is not null then
     raise exception 'Framework metadata leaked across organizations';
   end if;
   perform set_config('request.jwt.claims', '{"role":"authenticated","sub":"user_phase08"}', true);
-  if public.read_analysis_result(v_id, v_run) is not null then
+  if public.read_analysis_result_v2(v_id, v_run) is not null then
     raise exception 'Framework metadata was exposed without an organization';
   end if;
   perform set_config('request.jwt.claims',
@@ -240,8 +240,8 @@ begin
   select * into v_rerun from public.rerun_analysis(v_id);
   if not v_rerun.started then raise exception 'Framework fixture could not be rerun'; end if;
   perform set_config('cartograph.phase08_run', v_rerun.run_id::text, true);
-  if public.read_analysis_result(v_id, v_run) is not null
-    or public.read_analysis_result(v_id, v_rerun.run_id) is not null then
+  if public.read_analysis_result_v2(v_id, v_run) is not null
+    or public.read_analysis_result_v2(v_id, v_rerun.run_id) is not null then
     raise exception 'A rerun exposed old or unfinished framework metadata';
   end if;
 end;
@@ -429,7 +429,7 @@ do $$
 declare
   v_id uuid := current_setting('cartograph.phase08_id')::uuid;
   v_run uuid := current_setting('cartograph.phase08_run')::uuid;
-  v_result jsonb := public.read_analysis_result(v_id, v_run);
+  v_result jsonb := public.read_analysis_result_v2(v_id, v_run);
   v_rerun record;
 begin
   if v_result ->> 'framework' <> 'nestjs'
@@ -471,7 +471,7 @@ do $$
 declare
   v_id uuid := current_setting('cartograph.phase08_id')::uuid;
   v_run uuid := current_setting('cartograph.phase08_run')::uuid;
-  v_result jsonb := public.read_analysis_result(v_id, v_run);
+  v_result jsonb := public.read_analysis_result_v2(v_id, v_run);
 begin
   if v_result is null or v_result ->> 'framework' <> 'generic'
     or v_result -> 'fileRoles' is distinct from '[]'::jsonb
@@ -490,7 +490,7 @@ set local role anon;
 do $$
 begin
   begin
-    perform public.read_analysis_result(gen_random_uuid(), gen_random_uuid());
+    perform public.read_analysis_result_v2(gen_random_uuid(), gen_random_uuid());
     raise exception 'An anonymous user called the snapshot reader';
   exception when insufficient_privilege then null;
   end;

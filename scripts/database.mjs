@@ -47,7 +47,7 @@ try {
   const commands = {
     migrate: [{ command: ["db", "push", "--yes", ...flags] }],
     // Each suite has its own rollback boundary and must pass before the next.
-    verify: ["supabase/tests/phase02.sql", "supabase/tests/phase07.sql", "supabase/tests/phase08.sql"].map(path => {
+    verify: ["supabase/tests/phase02.sql", "supabase/tests/phase07.sql", "supabase/tests/phase08.sql", "supabase/tests/phase08_review.sql"].map(path => {
       const { sql, message } = verificationStatement(path);
       return { command: ["db", "query", sql], message };
     }),

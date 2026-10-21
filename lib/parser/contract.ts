@@ -118,6 +118,7 @@ export interface AnalysisResult {
   schemaVersion: 1;
   framework: Framework;
   fileRoles: FileRoleRecord[];
+  frameworkEntries: string[];
   routes: HttpRoute[];
   files: FileNode[];
   edges: GraphEdge[];

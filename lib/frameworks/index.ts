@@ -12,6 +12,7 @@ export type { FrameworkContext } from "./shared";
 export interface FrameworkAnalysis {
   framework: Framework;
   fileRoles: FileRoleRecord[];
+  frameworkEntries: string[];
   routes: HttpRoute[];
 }
 
@@ -70,11 +71,17 @@ export function analyzeFramework(context: FrameworkContext): FrameworkAnalysis {
   for (const entry of packages) entry.framework = packageFramework(entry);
   const framework = PRECEDENCE.find(candidate => packages.some(entry => entry.framework === candidate)) ?? "generic";
   const fileRoles: FileRoleRecord[] = [];
+  const frameworkEntries: string[] = [];
   const routes: HttpRoute[] = [];
   for (const entry of packages) {
     if (entry.framework !== framework) continue;
-    if (entry.framework === "nextjs" || entry.framework === "nestjs") {
-      const result = entry.framework === "nextjs" ? analyzeNext(entry) : analyzeNest(entry);
+    if (entry.framework === "nextjs") {
+      const result = analyzeNext(entry);
+      fileRoles.push(...result.fileRoles);
+      frameworkEntries.push(...result.frameworkEntries);
+      routes.push(...result.routes);
+    } else if (entry.framework === "nestjs") {
+      const result = analyzeNest(entry);
       fileRoles.push(...result.fileRoles);
       routes.push(...result.routes);
     } else if (entry.framework === "react") {
@@ -89,5 +96,5 @@ export function analyzeFramework(context: FrameworkContext): FrameworkAnalysis {
     || compareText(left.path, right.path) || left.line - right.line);
   const uniqueRoutes = routes.filter((route, index) => index === 0 || route.file !== routes[index - 1].file
     || route.method !== routes[index - 1].method || route.path !== routes[index - 1].path);
-  return { framework, fileRoles, routes: uniqueRoutes };
+  return { framework, fileRoles, frameworkEntries: [...new Set(frameworkEntries)].sort(compareText), routes: uniqueRoutes };
 }

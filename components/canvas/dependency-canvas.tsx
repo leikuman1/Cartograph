@@ -193,8 +193,8 @@ function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasPr
   const categories = categoriesForFramework(analysis.framework);
   const folded = useMemo(() => foldFolders(analysis.files, analysis.edges), [analysis]);
   const details = useMemo(() => repositoryDetails(analysis.files, analysis.edges, analysis.fileRoles), [analysis]);
-  const insights = useMemo(() => buildInsights(analysis.files, analysis.edges, analysis.framework, analysis.fileRoles), [analysis]);
-  const entryExclusions = useMemo(() => entryExclusionCounts(analysis.files.filter(file => file.fanIn === 0), analysis.framework, analysis.fileRoles), [analysis.files, analysis.framework, analysis.fileRoles]);
+  const insights = useMemo(() => buildInsights(analysis.files, analysis.edges, analysis.framework, analysis.fileRoles, analysis.frameworkEntries), [analysis]);
+  const entryExclusions = useMemo(() => entryExclusionCounts(analysis.files.filter(file => file.fanIn === 0), analysis.framework, analysis.fileRoles, analysis.frameworkEntries), [analysis.files, analysis.framework, analysis.fileRoles, analysis.frameworkEntries]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [pages, setPages] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [selection, setSelection] = useState<Selection>(null);

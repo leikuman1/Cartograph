@@ -103,7 +103,10 @@ Authenticated users call narrow
 for organization registration and starting/rerunning an analysis. These require a
 user and active organization from the signed token, use a fixed search path, and
 are unavailable to anonymous users. Stage, failure, and graph-storage RPCs are
-service-role only. The graph-read RPC runs with the caller's existing RLS policies.
+service-role only. Both graph-read RPCs run with the caller's existing RLS policies
+and return one consistent completed-run snapshot. `read_analysis_result` preserves
+the exact five-key phase 7 response; new callers use `read_analysis_result_v2` for
+framework roles, routes and special Next.js entry files. Both keep `schemaVersion: 1`.
 
 ## Organization synchronization without webhooks
 
@@ -214,8 +217,15 @@ Dynamic configuration, unknown prefixes, and unsupported routing syntax also
 produce no routes. React has file roles without an inferred routing system.
 Framework adapters reuse parsed syntax; no repository code is executed.
 
-Apply the phase 8 database migration with `pnpm db:migrate` before analyzing new
-repositories, then run `pnpm db:verify` to check metadata storage and RLS.
+Apply every migration with `pnpm db:migrate` before starting the new app, including
+`20261021020000_phase08_review_metadata.sql`; the earlier phase 8 migration was
+already applied and remains unchanged. Run `pnpm db:verify` to check metadata
+storage, both reader contracts and RLS. Rolling the app back to phase 7 works with
+the database still upgraded: the original reader retains its exact response and
+old writers clear framework metadata. An older phase 8 app still calling the
+original reader temporarily shows generic metadata until the updated caller is
+restarted. Existing analyses need an explicit rerun to collect special Next.js
+entry files; migration does not invent that evidence.
 
 The parser also remains usable without the app:
 

@@ -50,6 +50,10 @@ export function frameworkSupportsRoutes(framework: Framework): boolean {
   return framework === "nextjs" || framework === "nestjs";
 }
 
+export function frameworkSupportsEntries(framework: Framework): boolean {
+  return framework === "nextjs";
+}
+
 export function categoriesForFramework(framework: Framework): readonly CategoryDefinition[] {
   return categories[framework];
 }

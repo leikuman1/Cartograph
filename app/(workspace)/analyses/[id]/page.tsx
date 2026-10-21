@@ -24,7 +24,7 @@ async function AnalysisPageContent({ params }: { params: Promise<{ id: string }>
     ? await loadAnalysisResult(id, analysis.run_id) : null;
   return <AnalysisDetail key={orgId} organizationId={orgId} initial={analysis} graphRunId={result ? analysis.run_id : null}>
     {result && <DependencyCanvas analysis={result} repositoryName={analysis.project?.name ?? "Repository"}
-      repositoryUrl={analysis.project?.repository_url ?? null} commitSha={analysis.commit_sha} />}
+      repositoryUrl={analysis.project?.canonical_repository_url ?? null} commitSha={analysis.commit_sha} />}
   </AnalysisDetail>;
 }
 
