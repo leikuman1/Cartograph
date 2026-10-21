@@ -256,19 +256,21 @@ reader's graph projection, and the same run and organization visibility for both
 ## 13. Runtime facts follow execution, not declaration names
 
 ### Problem
-Ambient CommonJS declarations hid real requires and exports. Export assignments
-inside top-level variable initializers or ordinary assignment chains were missed.
+Ambient CommonJS declarations and type-only imports hid real requires and exports.
+Export assignments inside top-level variable initializers or ordinary assignment
+chains were missed.
 
 ### Root Cause
 Every declaration was treated as a runtime binding, and export tracking stopped
 at a statement or assignment target that was not itself a CommonJS export.
 
 ### Rule
-Skip ambient declaration subtrees when collecting runtime bindings. Follow direct
-assignment chains in top-level expressions and variable initializers in order;
-keep conditional and nested execution outside the export contract.
+Skip ambient declaration and type-only import subtrees when collecting runtime
+bindings. Follow direct assignment chains in top-level expressions and variable
+initializers in order; keep conditional and nested execution outside the export
+contract.
 
 ### Verification
-`lib/parser/parser.test.ts` covers ambient declarations and `declare global`, real
-local shadowing, chained initializers and assignments, replacement and alias
-identity, and excluded conditional and nested writes.
+`lib/parser/parser.test.ts` covers ambient declarations and `declare global`,
+type-only import forms, real local shadowing, chained initializers and assignments,
+replacement and alias identity, and excluded conditional and nested writes.

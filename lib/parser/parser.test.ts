@@ -654,6 +654,35 @@ test("only runtime require bindings create CommonJS dependencies", async () => {
   }
 });
 
+test("type-only imports do not hide runtime CommonJS globals", async () => {
+  const root = await temporaryRepository();
+  try {
+    const typeImports = {
+      "clause.ts": 'import type { require, module, exports } from "loader";',
+      "default.ts": 'import type require from "loader";',
+      "inline.ts": 'import { type require, type Module as module, type Exports as exports } from "loader";',
+      "namespace.ts": 'import type * as require from "loader";',
+      "equals.ts": 'import type require = Loader;',
+    };
+    await writeFixture(root, {
+      ...Object.fromEntries(Object.entries(typeImports).map(([file, declaration]) => [file,
+        `${declaration}\nrequire("./target"); exports.named = 1; module.exports.extra = 2;`])),
+      "runtime.ts": 'import { require, module, exports } from "loader"; require("./fake"); exports.fake = 1; module.exports.fake = 2;',
+      "target.js": "module.exports = 1;",
+    });
+    const result = await analyzeRepository(root);
+    const sources = Object.keys(typeImports).sort();
+    assert.deepEqual(result.edges, sources.map(source => ({ source, target: "target.js", kinds: ["require"] })));
+    assert.deepEqual(result.imports.filter(record => record.kind === "require").map(record => record.source), sources);
+    for (const source of sources) {
+      assert.deepEqual(result.files.find(file => file.path === source)?.exports, ["extra", "named"], source);
+    }
+    assert.deepEqual(result.files.find(file => file.path === "runtime.ts")?.exports, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("ambient CommonJS declarations describe runtime globals without hiding real local bindings", async () => {
   const root = await temporaryRepository();
   try {

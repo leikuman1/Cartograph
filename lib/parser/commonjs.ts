@@ -28,9 +28,12 @@ function sourceBindings(source: SourceFile) {
     }
   }
   source.forEachDescendant((declaration, traversal) => {
-    // Ambient declarations describe existing globals; they create no runtime
-    // bindings, including declarations nested inside a declare global block.
-    if (Node.isAmbientable(declaration) && declaration.isAmbient()) {
+    // Ambient declarations and type-only imports create no runtime bindings.
+    // Skip entire clauses so their default, named and namespace imports agree.
+    if ((Node.isAmbientable(declaration) && declaration.isAmbient())
+      || (Node.isImportClause(declaration) && declaration.isTypeOnly())
+      || (Node.isImportSpecifier(declaration) && declaration.isTypeOnly())
+      || (Node.isImportEqualsDeclaration(declaration) && declaration.isTypeOnly())) {
       traversal.skip();
       return;
     }
