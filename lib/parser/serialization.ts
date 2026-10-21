@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { categoriesForFramework, FILE_ROLES, FRAMEWORKS, frameworkSupportsEntries, frameworkSupportsRoutes, type FileRole, type Framework } from "../frameworks/taxonomy";
 import type {
   AnalysisCoverage,
   AnalysisResult,
@@ -7,6 +8,8 @@ import type {
   ExcludedDirectoryReason,
   FileCoverage,
   FileNode,
+  FileRoleRecord,
+  HttpRoute,
   GraphEdge,
   ImportCoverage,
   ImportKind,
@@ -256,6 +259,37 @@ function readCoverage(value: unknown, context: string): AnalysisCoverage {
   };
 }
 
+function readFramework(value: unknown): Framework {
+  for (const framework of FRAMEWORKS) if (framework === value) return framework;
+  return fail("framework", "unknown framework");
+}
+
+function readFileRole(value: unknown, context: string): FileRoleRecord {
+  const record = readRecord(value, context);
+  assertKeys(record, context, ["file", "role"]);
+  let role: FileRole | undefined;
+  for (const candidate of FILE_ROLES) if (record.role === candidate) role = candidate;
+  if (!role) return fail(`${context}.role`, "unknown file role");
+  return { file: readRepositoryPath(record.file, `${context}.file`), role };
+}
+
+function readHttpRoute(value: unknown, context: string): HttpRoute {
+  const record = readRecord(value, context);
+  assertKeys(record, context, ["file", "method", "path", "line"]);
+  const method = readString(record.method, `${context}.method`);
+  if (!["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"].includes(method)) {
+    fail(`${context}.method`, "unknown HTTP method");
+  }
+  const routePath = readNonEmptyString(record.path, `${context}.path`);
+  if (!routePath.startsWith("/") || /[\u0000-\u001f\u007f]/.test(routePath)) {
+    fail(`${context}.path`, "expected an absolute route pattern without control characters");
+  }
+  return {
+    file: readRepositoryPath(record.file, `${context}.file`), method, path: routePath,
+    line: readInteger(record.line, `${context}.line`, 1),
+  };
+}
+
 function compareText(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -330,6 +364,31 @@ function assertInvariants(result: AnalysisResult) {
   assertUnique(fileCoverage.excludedDirectories.map(directory => directory.path), "coverage.files.excludedDirectories");
 
   const filePaths = new Set(result.files.map(file => file.path));
+  assertSorted(result.frameworkEntries, compareText, "frameworkEntries");
+  assertUnique(result.frameworkEntries, "frameworkEntries");
+  if (!frameworkSupportsEntries(result.framework) && result.frameworkEntries.length > 0) {
+    fail("frameworkEntries", "this framework cannot have special entries");
+  }
+  for (const file of result.frameworkEntries) {
+    if (!filePaths.has(file)) fail("frameworkEntries", `file ${file} is not parsed`);
+  }
+  const roleCategories = new Set(categoriesForFramework(result.framework).map(category => category.id));
+  assertSorted(result.fileRoles, (left, right) => compareText(left.file, right.file) || compareText(left.role, right.role), "fileRoles");
+  assertUnique(result.fileRoles.map(record => record.file), "fileRoles");
+  for (const record of result.fileRoles) {
+    if (!filePaths.has(record.file)) fail("fileRoles", `file ${record.file} is not parsed`);
+    if (!roleCategories.has(record.role)) fail("fileRoles", `role ${record.role} does not belong to this framework`);
+  }
+  assertSorted(result.routes, (left, right) => compareText(left.file, right.file)
+    || compareText(left.method, right.method) || compareText(left.path, right.path), "routes");
+  assertUnique(result.routes.map(route => `${route.file}\0${route.method}\0${route.path}`), "routes");
+  if (!frameworkSupportsRoutes(result.framework) && result.routes.length > 0) fail("routes", "this framework cannot have routes");
+  const filesByPath = new Map(result.files.map(file => [file.path, file]));
+  for (const route of result.routes) {
+    const file = filesByPath.get(route.file);
+    if (!file) fail("routes", `file ${route.file} is not parsed`);
+    if (route.line > file.lineCount) fail("routes", `line ${route.line} exceeds ${route.file}`);
+  }
   for (const skipped of fileCoverage.skippedFiles) {
     if (filePaths.has(skipped.path)) fail("coverage.files.skippedFiles", `${skipped.path} is also parsed`);
   }
@@ -378,10 +437,21 @@ function assertInvariants(result: AnalysisResult) {
 
 export function validateAnalysisResult(value: unknown): AnalysisResult {
   const record = readRecord(value, "root");
-  assertKeys(record, "root", ["schemaVersion", "files", "edges", "imports", "coverage"]);
+  // Phase 7 has no framework block; earlier phase 8 snapshots lack only the
+  // special-entry list. A present list always requires the complete block.
+  const metadataKeys = ["framework", "fileRoles", "routes"];
+  const hasEntries = "frameworkEntries" in record;
+  const hasMetadata = hasEntries || metadataKeys.some(key => key in record);
+  assertKeys(record, "root", ["schemaVersion", "files", "edges", "imports", "coverage",
+    ...(hasMetadata ? metadataKeys : []), ...(hasEntries ? ["frameworkEntries"] : [])]);
   if (record.schemaVersion !== 1) fail("root.schemaVersion", "expected version 1");
   const result: AnalysisResult = {
     schemaVersion: 1,
+    framework: hasMetadata ? readFramework(record.framework) : readFramework("generic"),
+    fileRoles: hasMetadata ? readArray(record.fileRoles, "fileRoles").map((item, index) => readFileRole(item, `fileRoles[${index}]`)) : [],
+    frameworkEntries: hasEntries ? readArray(record.frameworkEntries, "frameworkEntries")
+      .map((item, index) => readRepositoryPath(item, `frameworkEntries[${index}]`)) : [],
+    routes: hasMetadata ? readArray(record.routes, "routes").map((item, index) => readHttpRoute(item, `routes[${index}]`)) : [],
     files: readArray(record.files, "files").map((item, index) => readFileNode(item, `files[${index}]`)),
     edges: readArray(record.edges, "edges").map((item, index) => readGraphEdge(item, `edges[${index}]`)),
     imports: readArray(record.imports, "imports").map((item, index) => readImportRecord(item, `imports[${index}]`)),

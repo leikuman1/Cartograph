@@ -100,11 +100,13 @@ state. Nothing moved focus to the row the interaction revealed.
 ### Rule
 Any state a control can enter from the keyboard survives the pointer leaving.
 When an interaction removes the focused element, move focus to the element the
-interaction revealed.
+interaction revealed. If a child renderer commits that element later, observe
+its insertion rather than assuming the parent's effect runs after it exists.
 
 ### Verification
 Manual: tab to a folder, move the mouse away, and confirm the highlight stays;
-press Enter in the files table and confirm focus lands on the revealed row.
+press Enter in the files and routes tables, including a collapsed folder, and
+confirm focus lands on the revealed row.
 
 ## 6. A framework convention matches a location, not a filename
 
@@ -118,12 +120,14 @@ A routing convention was matched on the basename alone. Next.js only treats
 those names as routes inside `app/` or `pages/`.
 
 ### Rule
-Encode the directory boundary in the pattern. Test the real entry files and
-ordinary modules that share the same basename.
+Resolve framework conventions relative to the detected package and its active
+routing root. Pass exact entry-file paths to consumers; a suffix match loses the
+package boundary and misclassifies ordinary modules inside monorepos.
 
 ### Verification
-`scripts/check-insights.ts` covered both lists; it was removed with the preview
-fixture in phase 7, so `entryReason` has no automated check right now.
+Framework adapter tests cover real special files, nested package scopes, shadowed
+routing roots, and ordinary modules with the same basename. Serialization and SQL
+checks preserve those exact entry paths through stored snapshots.
 
 ## 7. A trust boundary is enforced at the sink, not at the door
 
@@ -224,3 +228,27 @@ force. Unsupported special-file errors identify the member and its type.
 ### Verification
 Pipeline tests cover skipped links through extraction, discovery, coverage and
 cross-file import resolution, plus conflicting members and malformed bodies.
+
+## 12. An expanded read contract needs an explicit opt-in
+
+### Problem
+
+The framework migration added keys to an existing graph-read RPC. The previous
+application's strict validator rejected them, so a database-first upgrade broke
+old instances and application-only rollbacks.
+
+### Root Cause
+
+Tests proved that the new reader accepted old data, but never checked that the
+old reader still received its original response shape.
+
+### Rule
+
+Keep an existing RPC's response contract stable. Expose additional facts through
+an explicitly selected reader and preserve both callers' row policies and snapshot
+semantics. Repair an applied migration with a later migration.
+
+### Verification
+
+SQL checks assert the legacy reader's exact five keys, equality with the new
+reader's graph projection, and the same run and organization visibility for both.

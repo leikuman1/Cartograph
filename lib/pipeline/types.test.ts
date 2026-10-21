@@ -7,7 +7,10 @@ const summary: AnalysisSummary = {
   stage_message: "Parsing", updated_at: "2026-10-19T05:00:00Z",
   is_seed: false, created_at: "2026-10-19T04:59:00Z", started_at: "2026-10-19T04:59:00Z",
   completed_at: null, error_message: null, failed_stage: null,
-  commit_sha: "a".repeat(40), project: { name: "example/repo", repository_url: "https://github.com/example/repo" },
+  commit_sha: "a".repeat(40), project: {
+    name: "example/repo", repository_url: "https://github.com/Example/Repo.GIT",
+    canonical_repository_url: "https://github.com/example/repo",
+  },
 };
 
 function progress(values: Partial<ProgressMessage> = {}): ProgressMessage {

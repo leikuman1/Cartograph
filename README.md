@@ -103,7 +103,10 @@ Authenticated users call narrow
 for organization registration and starting/rerunning an analysis. These require a
 user and active organization from the signed token, use a fixed search path, and
 are unavailable to anonymous users. Stage, failure, and graph-storage RPCs are
-service-role only. The graph-read RPC runs with the caller's existing RLS policies.
+service-role only. Both graph-read RPCs run with the caller's existing RLS policies
+and return one consistent completed-run snapshot. `read_analysis_result` preserves
+the exact five-key phase 7 response; new callers use `read_analysis_result_v2` for
+framework roles, routes and special Next.js entry files. Both keep `schemaVersion: 1`.
 
 ## Organization synchronization without webhooks
 
@@ -185,9 +188,10 @@ visibility. The dashboard and detail page subscribe with Clerk authentication;
 a snapshot after subscription closes any missed-event gap. There is no database
 polling. A local clock marks stale rows without reading the database.
 
-The map reads files, resolved edges, imports, and coverage from stored rows in
-one consistent database snapshot. File coverage and local import resolution are
-separate percentages with both counts visible even when the banner is collapsed.
+The map reads files, resolved edges, imports, coverage, framework roles, and
+routes from stored rows in one consistent database snapshot. File coverage and
+local import resolution are separate percentages with both counts visible even
+when the banner is collapsed.
 Skipped files, excluded directories, and unresolved imports keep the map labeled
 incomplete. The previous committed parser output and `/preview` route are removed.
 
@@ -197,7 +201,31 @@ Expand folders into paginated file rows, select a file to highlight its imports
 and importers, or inspect the Files table. The detail panel shows direct
 connections and two-step traversals; category filtering and graph insights use
 the same stored parser output. Escape or a background click clears selection.
-Framework roles and route extraction have not run in this phase.
+Framework detection runs in fixed order: Next.js, NestJS, then React. The sidebar
+uses each framework's concrete roles in a fixed reading order; unmatched files
+keep Source, Tests, or Declarations. Unmatched repositories render normally with
+an empty Routes table. Older analyses need an explicit rerun to populate these
+new facts.
+
+The Routes table shows only recoverable HTTP methods and full path patterns.
+A route can reveal its file in the map or open the source at the analyzed commit
+and line on GitHub. Next.js page conventions and App Router HTTP exports, and
+NestJS controller/method decorators with a recoverable bootstrap, supply these
+facts. Pages Router API handlers retain their role but produce no route rows,
+since a method check in a function cannot prove which methods it serves.
+Dynamic configuration, unknown prefixes, and unsupported routing syntax also
+produce no routes. React has file roles without an inferred routing system.
+Framework adapters reuse parsed syntax; no repository code is executed.
+
+Apply every migration with `pnpm db:migrate` before starting the new app, including
+`20261021020000_phase08_review_metadata.sql`; the earlier phase 8 migration was
+already applied and remains unchanged. Run `pnpm db:verify` to check metadata
+storage, both reader contracts and RLS. Rolling the app back to phase 7 works with
+the database still upgraded: the original reader retains its exact response and
+old writers clear framework metadata. An older phase 8 app still calling the
+original reader temporarily shows generic metadata until the updated caller is
+restarted. Existing analyses need an explicit rerun to collect special Next.js
+entry files; migration does not invent that evidence.
 
 The parser also remains usable without the app:
 
@@ -219,7 +247,8 @@ pnpm db:verify
 pnpm db:advisors
 ```
 
-Run the browser acceptance check in `docs/specs/phrase-07.md` manually, including
-watching progress from a second tab. The workspace derives its organization
-from the server session, and switching teams refreshes that state. Theme choices
+Run the browser acceptance check in `docs/specs/phrase-08.md` manually. The phase
+7 progress checks, including watching progress from a second tab, remain manual.
+The workspace derives its organization from the server session, and switching
+teams refreshes that state. Theme choices
 are saved in local storage; system mode follows OS changes.

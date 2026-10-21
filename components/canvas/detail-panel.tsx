@@ -1,15 +1,19 @@
 "use client";
 
 import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { FileNode, GraphEdge } from "@/lib/parser/contract";
-import { categories, fileCategory, type FolderGroup, type Selection } from "@/lib/canvas/graph";
+import type { FileNode, FileRoleRecord, GraphEdge } from "@/lib/parser/contract";
+import { categoriesForFramework, categoryForFile, FRAMEWORK_LABELS, type Framework } from "@/lib/frameworks/taxonomy";
+import type { FolderGroup, Selection } from "@/lib/canvas/graph";
 import { countFileCategories, importedFileCounts, type RepositoryDetails } from "@/lib/canvas/details";
 import { TRAVERSAL_DEPTH, traverse, type EntryReason, type Insights, type TraversalDirection } from "@/lib/canvas/insights";
-import CategoryMark from "./category-mark";
+import CategoryMark, { CategorySymbol } from "./category-mark";
 import InsightsPanel from "./insights-panel";
 
 type DetailPanelProps = {
   repositoryName: string;
+  framework: Framework;
+  fileRoles: readonly FileRoleRecord[];
+  routeCount: number;
   details: RepositoryDetails;
   files: readonly FileNode[];
   edges: readonly GraphEdge[];
@@ -25,9 +29,10 @@ type DetailPanelProps = {
   onClear: () => void;
 };
 
-function FileList({ title, files, counts, empty, scrollable = false, hoveredFiles, onSelect, onHover }: {
+function FileList({ title, files, fileRoles, counts, empty, scrollable = false, hoveredFiles, onSelect, onHover }: {
   title: string;
   files: readonly FileNode[];
+  fileRoles: readonly FileRoleRecord[];
   counts?: ReadonlyMap<string, number>;
   empty: string;
   scrollable?: boolean;
@@ -42,7 +47,7 @@ function FileList({ title, files, counts, empty, scrollable = false, hoveredFile
         <button type="button" className={`detail-file-link ${hoveredFiles.has(file.path) ? "is-hovered" : ""}`}
           onClick={() => onSelect(file.path)} onMouseEnter={() => onHover({ kind: "file", path: file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) onHover(null); }}
           onFocus={() => onHover({ kind: "file", path: file.path })} onBlur={() => onHover(null)}>
-          <CategoryMark path={file.path} /><span className="detail-path">{file.path}</span>
+          <CategoryMark path={file.path} fileRoles={fileRoles} /><span className="detail-path">{file.path}</span>
           {counts && <span className="detail-count" aria-label={`${counts.get(file.path) ?? 0} dependents`}>{counts.get(file.path) ?? 0}</span>}
         </button>
       </li>)}
@@ -54,19 +59,20 @@ function Facts({ children }: { children: ReactNode }) {
   return <dl className="detail-facts">{children}</dl>;
 }
 
-export default function DetailPanel({ repositoryName, details, files, edges, edgeCount, selection, group, entryExclusions, insights, hoveredFiles, hoveredFolder, onSelect, onHover, onClear }: DetailPanelProps) {
+export default function DetailPanel({ repositoryName, framework, fileRoles, routeCount, details, files, edges, edgeCount, selection, group, entryExclusions, insights, hoveredFiles, hoveredFolder, onSelect, onHover, onClear }: DetailPanelProps) {
   const [tab, setTab] = useState<"structure" | "explanation">("structure");
   const [traversal, setTraversal] = useState<TraversalDirection | null>(null);
   const id = useId();
   const structureTab = useRef<HTMLButtonElement>(null);
   const explanationTab = useRef<HTMLButtonElement>(null);
+  const categories = categoriesForFramework(framework);
   const selected = selection?.kind === "file" ? details.byPath.get(selection.path) : undefined;
-  const category = selected ? categories.find(category => category.id === fileCategory(selected.file.path)) : undefined;
-  const members = group ? countFileCategories(group.files) : null;
+  const category = selected ? categoryForFile(selected.file.path, fileRoles) : undefined;
+  const members = group ? countFileCategories(group.files, fileRoles) : null;
   const counts = useMemo(() => new Map(importedFileCounts(files, edges).map(file => [file.path, file.importerCount])), [edges, files]);
   const walk = useMemo(() => selected && traversal ? traverse(files, edges, selected.file.path, traversal) : null, [edges, files, selected, traversal]);
   const excludedEntries = Object.values(entryExclusions).reduce((total, count) => total + count, 0);
-  const listProps = { hoveredFiles, onSelect, onHover };
+  const listProps = { fileRoles, hoveredFiles, onSelect, onHover };
   const title = selected ? "File" : group ? "Folder" : "Repository";
 
   function moveTab(event: KeyboardEvent<HTMLDivElement>) {
@@ -87,11 +93,11 @@ export default function DetailPanel({ repositoryName, details, files, edges, edg
       {selected ? <button type="button" className={`detail-selected-path detail-file-link ${hoveredFiles.has(selected.file.path) ? "is-hovered" : ""}`}
         onClick={() => onSelect(selected.file.path)} onMouseEnter={() => onHover({ kind: "file", path: selected.file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) onHover(null); }}
         onFocus={() => onHover({ kind: "file", path: selected.file.path })} onBlur={() => onHover(null)}>
-        <CategoryMark path={selected.file.path} /><span className="detail-path">{selected.file.path}</span>
+        <CategoryMark path={selected.file.path} fileRoles={fileRoles} /><span className="detail-path">{selected.file.path}</span>
       </button> : group ? <p className={`detail-folder-path ${hoveredFolder === group.id ? "is-hovered" : ""}`}>{group.path}</p> : <p className="detail-repository-name">{repositoryName}</p>}
       {tab === "explanation" ? <section className="detail-empty"><h3>No explanation yet</h3><p>Explanations will appear here once generated. No explanation has been generated for this {title.toLowerCase()}.</p></section> : selected ? <>
         <Facts><dt>Kind</dt><dd>{category?.label}</dd><dt>Length</dt><dd>{selected.file.lineCount} lines</dd><dt>Dependencies</dt><dd>{selected.dependencies.length}</dd><dt>Dependents</dt><dd>{selected.dependents.length}</dd></Facts>
-        {category?.id === "source" && <p className="detail-note">Source is the fallback kind; no test or declaration convention matched.</p>}
+        {category?.id === "source" && <p className="detail-note">Source is the fallback kind; no framework role, test, or declaration convention matched.</p>}
         <section className="detail-section">
           <div className="traversal-buttons" role="group" aria-label="Graph traversal">
             <button type="button" aria-pressed={traversal === "dependents"} onClick={() => setTraversal(traversal === "dependents" ? null : "dependents")}>Blast radius</button>
@@ -107,7 +113,7 @@ export default function DetailPanel({ repositoryName, details, files, edges, edg
                 <button type="button" className={`detail-file-link ${hoveredFiles.has(file.path) ? "is-hovered" : ""}`}
                   onClick={() => onSelect(file.path)} onMouseEnter={() => onHover({ kind: "file", path: file.path })} onMouseLeave={event => { if (!event.currentTarget.matches(":focus")) onHover(null); }}
                   onFocus={() => onHover({ kind: "file", path: file.path })} onBlur={() => onHover(null)}>
-                  <CategoryMark path={file.path} /><span className="detail-path">{file.path}</span>
+                  <CategoryMark path={file.path} fileRoles={fileRoles} /><span className="detail-path">{file.path}</span>
                 </button>
               </li>)}</ul>
             </div>)}
@@ -119,21 +125,21 @@ export default function DetailPanel({ repositoryName, details, files, edges, edg
         <FileList title="Dependents" files={selected.dependents} empty="No files import this file." {...listProps} />
       </> : group && members ? <>
         <Facts><dt>Files</dt><dd>{group.files.length}</dd></Facts>
-        <section className="detail-section"><h3>File kinds</h3><ul className="detail-kind-list">{categories.filter(category => members[category.id] > 0).map(category => <li key={category.id}>
-          <span className={`category-mark category-${category.id}`}>{category.code}</span><span>{category.label}</span><span className="detail-count">{members[category.id]}</span>
+        <section className="detail-section"><h3>File kinds</h3><ul className="detail-kind-list">{categories.filter(category => (members.get(category.id) ?? 0) > 0).map(category => <li key={category.id}>
+          <CategorySymbol category={category} /><span>{category.label}</span><span className="detail-count">{members.get(category.id) ?? 0}</span>
         </li>)}</ul></section>
         <FileList title="Files in this folder" files={group.files} empty="No parsed files." {...listProps} />
       </> : <>
-        <Facts><dt>Framework</dt><dd>Not detected</dd><dt>Files</dt><dd>{details.byPath.size}</dd><dt>Import edges</dt><dd>{edgeCount}</dd><dt>Routes</dt><dd>Not analyzed</dd></Facts>
-        <p className="detail-note">This analysis uses the fallback adapter; framework detection and route extraction have not run.</p>
+        <Facts><dt>Framework</dt><dd>{FRAMEWORK_LABELS[framework]}</dd><dt>Files</dt><dd>{details.byPath.size}</dd><dt>Import edges</dt><dd>{edgeCount}</dd><dt>Routes</dt><dd>{routeCount}</dd></Facts>
+        <p className="detail-note">{framework === "generic" ? "No supported framework was detected. Files use generic kinds." : "File roles come from the detected framework adapter."} Only fully recovered HTTP methods and paths appear in Routes.</p>
         <p className="detail-note">Counts below are distinct files connected by resolved imports.</p>
         <FileList title="Most depended on" files={details.mostImported.map(item => item.file)} counts={counts} empty="No files have dependents." scrollable {...listProps} />
         <p className="detail-note">Sorted by dependent count, then file path.</p>
         <FileList title="Start reading" files={details.entryPoints.map(item => item.file)} empty="Every file has at least one dependent." scrollable {...listProps} />
         <p className="detail-note">Files with no dependents, sorted by path.</p>
-        <section className="detail-section"><h3>Unclassified by convention<span className="detail-count">{details.categoryCounts.source}</span></h3><p className="detail-note">These files use the fallback Source kind. Only tests and declarations are identified by current filename conventions.</p></section>
-        <p className="detail-note">{excludedEntries} files with no importers are treated as framework or tool entry points and left out of the unimported insight ({entryExclusions.test} tests, {entryExclusions.config} configs, {entryExclusions["framework-entry"]} route files, {entryExclusions["ambient-declaration"]} declarations).</p>
-        <InsightsPanel insights={insights} hoveredFiles={hoveredFiles} onSelect={onSelect} onHover={onHover} />
+        <section className="detail-section"><h3>Unclassified by convention<span className="detail-count">{details.categoryCounts.get("source") ?? 0}</span></h3><p className="detail-note">These files use the fallback Source kind. No framework role, test, or declaration convention matched.</p></section>
+        <p className="detail-note">{excludedEntries} files with no importers are treated as framework or tool entry points and left out of the unimported insight ({entryExclusions.test} tests, {entryExclusions.config} configs, {entryExclusions["framework-entry"]} framework entries, {entryExclusions["ambient-declaration"]} declarations).</p>
+        <InsightsPanel insights={insights} fileRoles={fileRoles} hoveredFiles={hoveredFiles} onSelect={onSelect} onHover={onHover} />
       </>}
     </div>
   </aside>;

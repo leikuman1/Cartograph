@@ -7,6 +7,7 @@ export type AnalysisStatus = "queued" | "running" | "completed" | "failed";
 export interface AnalysisProject {
   name: string;
   repository_url: string;
+  canonical_repository_url: string;
 }
 
 export interface AnalysisSummary {
