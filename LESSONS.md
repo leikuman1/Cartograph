@@ -100,11 +100,13 @@ state. Nothing moved focus to the row the interaction revealed.
 ### Rule
 Any state a control can enter from the keyboard survives the pointer leaving.
 When an interaction removes the focused element, move focus to the element the
-interaction revealed.
+interaction revealed. If a child renderer commits that element later, observe
+its insertion rather than assuming the parent's effect runs after it exists.
 
 ### Verification
 Manual: tab to a folder, move the mouse away, and confirm the highlight stays;
-press Enter in the files table and confirm focus lands on the revealed row.
+press Enter in the files and routes tables, including a collapsed folder, and
+confirm focus lands on the revealed row.
 
 ## 6. A framework convention matches a location, not a filename
 

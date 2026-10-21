@@ -240,12 +240,22 @@ function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasPr
 
   useEffect(() => {
     const path = pendingFocus.current;
-    if (!path || view !== "map" || !ready) return;
-    // The file row only exists after the folder expansion and page change render.
-    const row = frame.current?.querySelector<HTMLButtonElement>(`[data-file-path="${CSS.escape(path)}"]`);
-    if (!row) return;
-    pendingFocus.current = null;
-    row.focus();
+    const element = frame.current;
+    if (!path || view !== "map" || !ready || !element) return;
+    const focusRow = () => {
+      const row = element.querySelector<HTMLButtonElement>(`[data-file-path="${CSS.escape(path)}"]`);
+      if (!row) return false;
+      pendingFocus.current = null;
+      row.focus();
+      return true;
+    };
+    if (focusRow()) return;
+    // React Flow can commit the expanded rows after this effect has run.
+    const observer = new MutationObserver(() => {
+      if (focusRow()) observer.disconnect();
+    });
+    observer.observe(element, { childList: true, subtree: true });
+    return () => observer.disconnect();
   }, [expanded, pages, ready, view]);
 
   const toggle = useCallback((id: string) => {
