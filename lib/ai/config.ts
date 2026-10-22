@@ -1,7 +1,7 @@
 // Model changes are reviewed code changes, never a floating provider default.
 // A proxy must preserve the version named by this ID rather than remap it.
 export const PINNED_MODEL = "workbuddy-ai/deepseek-v4.1-flash";
-export const PROMPT_VERSION = "phase10-1";
+export const PROMPT_VERSION = "phase10-2";
 
 export function aiConfiguration() {
   const model = process.env.OPENAI_MODEL?.trim() || PINNED_MODEL;

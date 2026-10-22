@@ -297,3 +297,25 @@ all duplicate, coverage, endpoint and fan-count checks.
 `lib/parser/serialization.test.ts` exercises Unicode paths, edge targets and route
 patterns, validates special-entry storage round trips, and rejects malformed
 transport order and graph data. The original standalone edge bytes stay intact.
+
+## 15. Model wording must respect the renderer's path contract
+
+### Problem
+The controllers folder explanation failed twice even though its repository file
+references were valid. Ordinary shorthand such as `author/genre` and `GET/POST`
+matched the renderer's unknown-path check.
+
+### Root Cause
+The prompt restricted invented file paths but still allowed slash-separated prose.
+The renderer cannot reliably distinguish that prose from an unprovided path.
+
+### Rule
+When output syntax has a strict validator, describe that syntax in the prompt too.
+Reserve slashes for exact supplied file paths and spell prose alternatives with
+"and" or "or". Version the prompt change in the cache identity; keep the unknown-path
+check intact.
+
+### Verification
+BrowserOS Neo generated the full controllers folder explanation after the prompt
+change. A repeat click hit the persistent cache; its LangSmith trace had no model
+call. AI tests still reject unprovided paths, and types, lint and build pass.
