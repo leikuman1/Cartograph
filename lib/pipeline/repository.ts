@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ const ARCHIVE_HOST = "codeload.github.com";
 const API_TIMEOUT_MS = 20_000;
 const ARCHIVE_TIMEOUT_MS = 120_000;
 const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
+const MAX_SOURCE_BYTES = 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 200 * 1024 * 1024;
 const MAX_DECOMPRESSED_BYTES = 220 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
@@ -73,6 +75,8 @@ async function githubJson(pathname: string, signal: AbortSignal) {
       "User-Agent": "cartograph-local",
       "X-GitHub-Api-Version": "2022-11-28",
     },
+    cache: "no-store",
+    credentials: "omit",
     redirect: "error",
     signal,
   });
@@ -103,10 +107,83 @@ async function defaultBranch(repository: RepositoryReference, signal: AbortSigna
     signal,
   ));
   const sha = commit?.sha;
-  if (typeof sha !== "string" || !SHA.test(sha)) {
+  if (typeof sha !== "string" || sha.length !== 40 || !SHA.test(sha)) {
     throw new Error("GitHub did not report a commit for the default branch.");
   }
   return sha;
+}
+
+export async function resolveRepositoryHead(repository: RepositoryReference): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    return await defaultBranch(repository, controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("GitHub metadata request timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function readRepositorySource(
+  repository: RepositoryReference,
+  commitSha: string,
+  filePath: string,
+): Promise<{ content: string; contentHash: string } | null> {
+  if (commitSha.length !== 40 || !SHA.test(commitSha)) {
+    throw new Error("A full GitHub commit SHA is required to read repository source.");
+  }
+  const sourcePath = safeRepositoryPath(filePath, false).split("/").map(encodeURIComponent).join("/");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  let response: Response | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    response = await fetch(
+      `https://raw.githubusercontent.com/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/${commitSha}/${sourcePath}`,
+      {
+        headers: { "User-Agent": "cartograph-local" },
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        signal: controller.signal,
+      },
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Repository source could not be read (HTTP ${response.status}).`);
+    if (!response.body) throw new Error("GitHub did not return a repository source body.");
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_SOURCE_BYTES) {
+      throw new Error("The repository source file is larger than the 1 MiB limit.");
+    }
+    reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_SOURCE_BYTES) throw new Error("The repository source file is larger than the 1 MiB limit.");
+      chunks.push(Buffer.from(value));
+    }
+    const bytes = Buffer.concat(chunks, size);
+    // Discovery hashes the original bytes, including a BOM that decoding strips.
+    const contentHash = createHash("sha256").update(bytes).digest("hex");
+    const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { content, contentHash };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("The repository source request timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (reader) {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    } else if (response?.body && !response.body.locked) {
+      await response.body.cancel().catch(() => {});
+    }
+  }
 }
 
 async function downloadArchive(repository: RepositoryReference, commitSha: string, filePath: string) {
@@ -160,15 +237,15 @@ function readOctal(block: Buffer, offset: number, length: number) {
   return value;
 }
 
-function safeArchivePath(raw: string, directory: boolean) {
+function safeRepositoryPath(raw: string, directory: boolean) {
   const value = directory && raw.endsWith("/") ? raw.slice(0, -1) : raw;
   const segments = value.split("/");
-  // The same archive must stay safe on Windows as well as POSIX. In particular,
-  // a colon can open a Windows alternate data stream instead of a source file.
+  // Source reads accept the same paths as extraction on Windows and POSIX.
+  // A colon can open a Windows alternate data stream instead of a source file.
   if (segments.some(segment => !segment || segment === "." || segment === ".."
     || /[\x00-\x1f\x7f\\<>:"|?*]/.test(segment) || /[. ]$/.test(segment)
     || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(segment))) {
-    throw new Error("The repository archive contains an unsafe path.");
+    throw new Error("The repository contains an unsafe path.");
   }
   return value;
 }
@@ -356,7 +433,7 @@ export async function extractArchive(archivePath: string, destination: string): 
       const size = attributes?.size ?? headerSize;
       const prefix = readString(block, 345, 155);
       const name = readString(block, 0, 100);
-      const entryPath = safeArchivePath(attributes?.path ?? (prefix ? `${prefix}/${name}` : name), type === "5");
+      const entryPath = safeRepositoryPath(attributes?.path ?? (prefix ? `${prefix}/${name}` : name), type === "5");
       const [archiveRoot, ...rest] = entryPath.split("/");
       if (rootName === null) rootName = archiveRoot;
       else if (rootName !== archiveRoot) throw new Error("The repository archive has more than one root.");
@@ -433,17 +510,7 @@ export async function extractArchive(archivePath: string, destination: string): 
 // Downloads and extracts an untrusted public archive. Each archive and each
 // extracted tree gets its own new temporary directory; nothing runs from it.
 export async function fetchRepository(repository: RepositoryReference): Promise<FetchedRepository> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-  let commitSha: string;
-  try {
-    commitSha = await defaultBranch(repository, controller.signal);
-  } catch (error) {
-    if (controller.signal.aborted) throw new Error("GitHub metadata request timed out.");
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const commitSha = await resolveRepositoryHead(repository);
 
   const archiveDirectory = await mkdtemp(path.join(tmpdir(), "cartograph-archive-"));
   let extractionDirectory: string | undefined;

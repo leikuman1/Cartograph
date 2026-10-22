@@ -5,6 +5,10 @@ import AnalysisDetail from "@/components/pipeline/analysis-detail";
 import DependencyCanvas from "@/components/canvas/dependency-canvas";
 import { getAnalysis, loadAnalysisResult } from "@/lib/analyses";
 import { requireOrganization } from "@/lib/auth";
+import { aiConfiguration } from "@/lib/ai/config";
+import { repositoryFreshness } from "@/lib/ai/freshness";
+import { UNKNOWN_FRESHNESS } from "@/lib/ai/types";
+import { loadModelRoles } from "@/lib/ai/roles";
 
 export const metadata: Metadata = { title: "Analysis · Cartograph" };
 
@@ -22,9 +26,17 @@ async function AnalysisPageContent({ params }: { params: Promise<{ id: string }>
   // never renders a half-written graph.
   const result = analysis.status === "completed" && analysis.run_id
     ? await loadAnalysisResult(id, analysis.run_id) : null;
+  const config = aiConfiguration();
+  const repositoryUrl = analysis.project?.canonical_repository_url ?? null;
+  const [modelRoles, freshness] = result && analysis.run_id
+    ? await Promise.all([
+      loadModelRoles(id, analysis.run_id, config.model, result),
+      repositoryUrl && analysis.commit_sha ? repositoryFreshness(repositoryUrl, analysis.commit_sha) : Promise.resolve(UNKNOWN_FRESHNESS),
+    ]) : [[], UNKNOWN_FRESHNESS];
   return <AnalysisDetail key={orgId} organizationId={orgId} initial={analysis} graphRunId={result ? analysis.run_id : null}>
-    {result && <DependencyCanvas analysis={result} repositoryName={analysis.project?.name ?? "Repository"}
-      repositoryUrl={analysis.project?.canonical_repository_url ?? null} commitSha={analysis.commit_sha} />}
+    {result && analysis.run_id && <DependencyCanvas key={`${orgId}:${id}:${analysis.run_id}:${config.model}`} analysis={result} repositoryName={analysis.project?.name ?? "Repository"}
+      repositoryUrl={repositoryUrl} commitSha={analysis.commit_sha} initialModelRoles={modelRoles} freshness={freshness}
+      aiContext={{ organizationId: orgId, analysisId: id, runId: analysis.run_id, model: config.model, tracing: config.tracing }} />}
   </AnalysisDetail>;
 }
 

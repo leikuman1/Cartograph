@@ -1,5 +1,5 @@
-import type { FileNode, FileRoleRecord, GraphEdge } from "../parser/contract";
-import { categoryForFile, type FileCategory } from "../frameworks/taxonomy";
+import type { FileNode, GraphEdge } from "../parser/contract";
+import { categoryForFile, type DisplayRoleRecord, type FileCategory } from "../frameworks/taxonomy";
 import { compareText } from "./graph";
 
 export interface FileDetails {
@@ -8,7 +8,7 @@ export interface FileDetails {
   dependents: FileNode[];
 }
 
-export function countFileCategories(files: readonly FileNode[], fileRoles: readonly FileRoleRecord[]) {
+export function countFileCategories(files: readonly FileNode[], fileRoles: readonly DisplayRoleRecord[]) {
   const counts = new Map<FileCategory, number>();
   for (const file of files) {
     const category = categoryForFile(file.path, fileRoles).id;
@@ -17,7 +17,7 @@ export function countFileCategories(files: readonly FileNode[], fileRoles: reado
   return counts;
 }
 
-export function repositoryDetails(files: readonly FileNode[], edges: readonly GraphEdge[], fileRoles: readonly FileRoleRecord[]) {
+export function repositoryDetails(files: readonly FileNode[], edges: readonly GraphEdge[], fileRoles: readonly DisplayRoleRecord[]) {
   const byPath = new Map<string, FileDetails>(files.map(file => [file.path, { file, dependencies: [], dependents: [] }]));
   const dependencies = new Map(files.map(file => [file.path, new Set<string>()]));
   const dependents = new Map(files.map(file => [file.path, new Set<string>()]));

@@ -100,6 +100,12 @@ export type Database = {
         Update: Partial<FileRow>;
         Relationships: [];
       };
+      ai_cache: {
+        Row: { organization_id: string; cache_key: string; model: string; operation: string; result: Record<string, unknown>; created_at: string };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       edges: {
         Row: EdgeRow;
         Insert: Pick<EdgeRow, "organization_id" | "analysis_id" | "source_file_id" | "target_file_id"> &
@@ -110,6 +116,10 @@ export type Database = {
     };
     Views: Record<never, never>;
     Functions: {
+      read_ai_roles: {
+        Args: { p_analysis_id: string; p_run_id: string; p_model: string };
+        Returns: unknown;
+      };
       ensure_organization: {
         Args: Record<never, never>;
         Returns: undefined;

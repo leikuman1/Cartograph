@@ -1,3 +1,5 @@
+import type { ModelRole, ModelRoleRecord } from "../ai/types";
+
 // Browser-safe vocabulary. Detection and syntax extraction live in the adapters.
 export const FRAMEWORKS = ["nextjs", "nestjs", "express", "react", "generic"] as const;
 export type Framework = (typeof FRAMEWORKS)[number];
@@ -15,7 +17,8 @@ export const FILE_ROLES = [
   "route", "model", "middleware",
 ] as const;
 export type FileRole = (typeof FILE_ROLES)[number];
-export type FileCategory = FileRole | "source" | "test" | "declaration";
+export type FileCategory = FileRole | ModelRole | "source" | "test" | "declaration";
+export type DisplayRoleRecord = { file: string; role: FileRole | ModelRole };
 
 export interface CategoryDefinition {
   id: FileCategory;
@@ -38,7 +41,10 @@ const definitions: Record<FileCategory, CategoryDefinition> = {
   route: { id: "route", label: "Routes", code: "R", description: "Files in Express route directories" },
   model: { id: "model", label: "Models", code: "M", description: "Files in Express model directories" },
   middleware: { id: "middleware", label: "Middleware", code: "W", description: "Files in Express middleware directories" },
-  source: { id: "source", label: "Source", code: "S", description: "Source files with no framework role" },
+  repository: { id: "repository", label: "Repositories", code: "R", description: "Data access role suggested by AI" },
+  util: { id: "util", label: "Utilities", code: "U", description: "Utility role suggested by AI" },
+  config: { id: "config", label: "Configuration", code: "G", description: "Configuration role suggested by AI" },
+  source: { id: "source", label: "Source", code: "S", description: "Source files without an assigned role" },
   test: { id: "test", label: "Tests", code: "T", description: "Test files" },
   declaration: { id: "declaration", label: "Declarations", code: "D", description: "Type declaration files" },
 };
@@ -70,8 +76,20 @@ export function genericCategoryForPath(path: string): CategoryDefinition {
   return definitions.source;
 }
 
-type RoleRecords = readonly { file: string; role: FileRole }[];
-const roleIndexes = new WeakMap<RoleRecords, ReadonlyMap<string, FileRole>>();
+export function categoriesForDisplay(framework: Framework, roles: readonly DisplayRoleRecord[]): readonly CategoryDefinition[] {
+  const base = categoriesForFramework(framework);
+  const present = new Set(roles.map(record => record.role));
+  const extra = Object.values(definitions).filter(category => [...present].some(role => role === category.id) && !base.some(item => item.id === category.id));
+  return [...base.filter(item => item.id !== "source" && item.id !== "test" && item.id !== "declaration"), ...extra, ...generic];
+}
+
+export function displayRoles(adapter: readonly DisplayRoleRecord[], model: readonly ModelRoleRecord[]): DisplayRoleRecord[] {
+  const known = new Set(adapter.map(record => record.file));
+  return [...adapter, ...model.filter(record => !known.has(record.file))];
+}
+
+type RoleRecords = readonly DisplayRoleRecord[];
+const roleIndexes = new WeakMap<RoleRecords, ReadonlyMap<string, FileRole | ModelRole>>();
 
 export function categoryForFile(path: string, fileRoles: RoleRecords): CategoryDefinition {
   const genericCategory = genericCategoryForPath(path);

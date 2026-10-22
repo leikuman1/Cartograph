@@ -1,14 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import type { FileNode, FileRoleRecord } from "@/lib/parser/contract";
+import type { FileNode } from "@/lib/parser/contract";
+import type { DisplayRoleRecord } from "@/lib/frameworks/taxonomy";
 import type { Selection } from "@/lib/canvas/graph";
 import { INSIGHT_DESCRIPTIONS, insightCount, type Insights } from "@/lib/canvas/insights";
 import CategoryMark from "./category-mark";
 
 type InsightsPanelProps = {
   insights: Insights;
-  fileRoles: readonly FileRoleRecord[];
+  fileRoles: readonly DisplayRoleRecord[];
   hoveredFiles: ReadonlySet<string>;
   onSelect: (path: string) => void;
   onHover: (selection: Selection) => void;
@@ -16,7 +17,7 @@ type InsightsPanelProps = {
 
 function FileEntries({ files, fileRoles, suffix, hoveredFiles, onSelect, onHover }: {
   files: readonly FileNode[];
-  fileRoles: readonly FileRoleRecord[];
+  fileRoles: readonly DisplayRoleRecord[];
   suffix?: (file: FileNode) => string;
   hoveredFiles: ReadonlySet<string>;
   onSelect: (path: string) => void;
