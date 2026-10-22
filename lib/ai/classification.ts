@@ -1,5 +1,3 @@
-import type { ModelRoleRecord } from "./types";
-
 export const MAX_INPUT_BYTES = 240000;
 const MAX_FILES_PER_BATCH = 8;
 
@@ -49,18 +47,5 @@ export async function classificationOutput<T>(generate: () => Promise<unknown>, 
   try { return validate(output); }
   catch (error) {
     throw new ClassificationUnavailable("The model returned invalid AI roles. Retry Assign AI roles on the saved map.", { cause: error });
-  }
-}
-
-export async function optionalClassification(
-  classify: () => Promise<ModelRoleRecord[]>,
-  reportUnavailable: (message: string) => void,
-): Promise<ModelRoleRecord[]> {
-  try {
-    return await classify();
-  } catch (error) {
-    if (!(error instanceof ClassificationUnavailable)) throw error;
-    reportUnavailable(error.message);
-    return [];
   }
 }

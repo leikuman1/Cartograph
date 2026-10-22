@@ -11,7 +11,6 @@ import { aiConfiguration } from "@/lib/ai/config";
 import { classifySnapshot } from "@/lib/ai/operations";
 import { pipelineCache } from "@/lib/ai/storage";
 import { flushTraces } from "@/lib/ai/client";
-import { optionalClassification } from "@/lib/ai/classification";
 import type { Database } from "@/lib/supabase/database.types";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -88,13 +87,10 @@ export async function runAnalysis(analysisId: string, runId: string, repositoryU
       const { data: claimed, error: claimError } = await client.from("analyses").select("organization_id")
         .eq("id", analysisId).eq("run_id", runId).single();
       if (claimError || !claimed) throw new Error("The analysis run could not be verified for classification.");
-      // A provider outage or an oversized input leaves the parsed map intact and
-      // unlabelled; the saved map reports how many files have no role.
-      roles = await optionalClassification(
-        () => classifySnapshot(result, new Map(discovery.sourceFiles.map(file => [file.path, file.content])),
-          pipelineCache(claimed.organization_id, config.model)),
-        message => console.error("AI role classification unavailable", { analysisId, runId, message }),
-      );
+      // Classification keeps completed batches on model failure; the saved map
+      // reports how many files remain without a role.
+      roles = await classifySnapshot(result, new Map(discovery.sourceFiles.map(file => [file.path, file.content])),
+        pipelineCache(claimed.organization_id, config.model));
     }
     current = "store";
     await stage(client, analysisId, runId, "store", "Storing the dependency map");

@@ -7,9 +7,12 @@ const SLASH_PROSE = new Set(["and/or", "client/server", "request/response", "rea
 function hasUnknownPath(text: string, folders: ReadonlySet<string>) {
   const references = text.matchAll(/(?:[\p{L}\p{N}_@.-]+\/)+[\p{L}\p{N}_@.-]+|\b[\w.-]+\.(?:[cm]?[jt]sx?|json|ya?ml|md|css|html|vue|svelte)\b/giu);
   for (const [reference] of references) {
-    if (folders.has(reference) || FRAMEWORK_NAMES.has(reference.toLowerCase()) || SLASH_PROSE.has(reference.toLowerCase())) continue;
-    // HTTP method pairs are ordinary prose, never repository paths.
-    if (/^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)(?:\/(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS))+$/.test(reference)) continue;
+    // Keep exact folder names (including trailing dots); punctuation may remove
+    // at most one period, never a path character such as a trailing hyphen.
+    const candidates = reference.endsWith(".") ? [reference, reference.slice(0, -1)] : [reference];
+    if (candidates.some(candidate => folders.has(candidate) || FRAMEWORK_NAMES.has(candidate.toLowerCase()) ||
+      SLASH_PROSE.has(candidate.toLowerCase()) ||
+      /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)(?:\/(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS))+$/.test(candidate))) continue;
     return true;
   }
   return false;

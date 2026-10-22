@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AnalysisResult, FileNode } from "../parser/contract";
 import { cachedOperation, type AiCache } from "./cache";
-import { classificationBatches, classificationOutput, MAX_INPUT_BYTES, optionalClassification } from "./classification";
+import { classificationBatches, MAX_INPUT_BYTES } from "./classification";
 import { explanationContext, inputKey, validateRoles } from "./context";
 import { renderableDocument, validateDocument } from "./document";
 import { roleCandidates } from "./candidates";
+import { classifySnapshot } from "./operations";
+import { PINNED_MODEL } from "./config";
 import { categoryForFile, categoriesForDisplay, displayRoles } from "../frameworks/taxonomy";
 
 function file(path: string, hash = "a"): FileNode {
@@ -92,6 +94,21 @@ test("explanations accept supplied folders and framework prose without admitting
   assert.equal(namedFile.blocks[0].children[0].kind, "file");
 });
 
+test("explanation punctuation preserves allowed references and rejects unknown paths", () => {
+  const paths = ["a/nested/page.tsx", "a/trailing./value.ts", "src/value.ts."];
+  for (const markdown of ["Uses read/write.", "Handles GET/POST.", "Uses a/nested.", "Uses a/trailing.."]) {
+    const document = renderableDocument({ markdown }, paths);
+    assert.deepEqual(validateDocument(document, paths), document);
+    assert.equal(document.blocks[0].children.map(node => node.kind === "file" ? node.path : node.text).join(""), markdown);
+  }
+  const document = renderableDocument({ markdown: "Reads `src/value.ts.`." }, paths);
+  assert.deepEqual(document.blocks[0].children[1], { kind: "file", path: "src/value.ts." });
+  assert.deepEqual(validateDocument(document, paths), document);
+  for (const markdown of ["Uses a/nested-.", "Uses a/nested..", "Uses unknown/folder.", "Uses GET/POST-."]) {
+    assert.throws(() => renderableDocument({ markdown }, paths), /not supplied/);
+  }
+});
+
 test("classification batches fit serialized UTF-8 input and report oversized files", () => {
   const files = ["one.ts", "large.ts", "two.ts", "three.ts"].map(path => ({ path, contentHash: "a".repeat(64) }));
   const sources = new Map([
@@ -107,18 +124,66 @@ test("classification batches fit serialized UTF-8 input and report oversized fil
   assert.throws(() => classificationBatches(files, new Map()), /Source is unavailable/);
 });
 
-test("only provider and invalid model output permit optional classification", async () => {
-  const messages: string[] = [];
-  const report = (message: string) => messages.push(message);
-  assert.deepEqual(await optionalClassification(() => classificationOutput(
-    async () => { throw new Error("provider failed"); }, () => []), report), []);
-  assert.deepEqual(await optionalClassification(() => classificationOutput(
-    async () => ({ roles: [] }), () => { throw new Error("invalid roles"); }), report), []);
-  assert.equal(messages.length, 2);
-  assert.match(messages[0], /could not complete/);
-  assert.match(messages[1], /invalid AI roles/);
-  await assert.rejects(optionalClassification(async () => { throw new Error("cache failed"); }, report), /cache failed/);
-  assert.equal(messages.length, 2);
+test("classification keeps completed batches after model failure and propagates cache failures", async t => {
+  const environment = {
+    OPENAI_API_KEY: "fixture-key", OPENAI_BASE_URL: "http://127.0.0.1:34567/v1",
+    OPENAI_MODEL: PINNED_MODEL, LANGSMITH_TRACING: "false",
+  };
+  const original = new Map(Object.keys(environment).map(name => [name, process.env[name]]));
+  for (const [name, value] of Object.entries(environment)) process.env[name] = value;
+  t.after(() => {
+    for (const [name, value] of original) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  const analysis = graph(Array.from({ length: 17 }, (_, index) => `file-${index}.ts`));
+  const sources = new Map(analysis.files.map(file => [file.path, "export const value = 1;"]));
+  const expected = analysis.files.slice(0, 8).map(file => ({ file: file.path, role: "util", contentHash: file.contentHash }));
+  let failure = "provider";
+  let modelCalls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    modelCalls += 1;
+    return failure.endsWith("provider") ? new Response("Unavailable", { status: 503 }) : Response.json({
+      id: "fixture", object: "chat.completion", created: 0, model: PINNED_MODEL,
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: JSON.stringify({ roles: failure === "cache write" ? expected : [] }) } }],
+    });
+  });
+  const reports: unknown[][] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => { reports.push(args); });
+  for (const scenario of ["provider", "invalid output", "first provider", "cache read", "cache write", "invalid cache", "missing source"]) {
+    await t.test(scenario, async () => {
+      failure = scenario;
+      modelCalls = 0;
+      reports.length = 0;
+      let reads = 0;
+      const cache: AiCache = {
+        async read() {
+          reads += 1;
+          if (scenario === "cache write" || scenario === "first provider") return null;
+          if (reads === 1) return { roles: expected };
+          if (scenario === "cache read") throw new Error("cache read failed");
+          if (scenario === "invalid cache") return { roles: [] };
+          return null;
+        },
+        async write() { throw new Error("cache write failed"); },
+      };
+      if (scenario === "missing source") {
+        await assert.rejects(classifySnapshot(analysis, new Map(), cache), /Source is unavailable/);
+        assert.equal(reads, 0);
+        assert.equal(modelCalls, 0);
+        assert.equal(reports.length, 0);
+      } else if (["provider", "invalid output", "first provider"].includes(scenario)) {
+        assert.deepEqual(await classifySnapshot(analysis, sources, cache), scenario === "first provider" ? [] : expected);
+        assert.equal(reads, scenario === "first provider" ? 1 : 2, "classification must stop at the failed batch");
+        assert.equal(modelCalls, 1);
+        assert.equal(reports.length, 1);
+      } else {
+        await assert.rejects(classifySnapshot(analysis, sources, cache), scenario === "invalid cache" ? /every supplied file/ : /cache .* failed/);
+        assert.equal(reports.length, 0);
+      }
+    });
+  }
 });
 
 test("model roles cannot introduce structural roles or override adapter facts", () => {
