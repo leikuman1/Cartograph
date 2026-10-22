@@ -12,7 +12,7 @@
     "test:parser": "tsx --test lib/parser/parser.test.ts lib/parser/serialization.test.ts lib/frameworks/frameworks.test.ts lib/frameworks/taxonomy.test.ts",
     "test:pipeline": "tsx --test lib/pipeline/repository.test.ts lib/pipeline/archive.test.ts lib/pipeline/types.test.ts",
     "test:environment": "tsx --test scripts/environment.test.ts",
-    "test:ai": "tsx --test lib/ai/ai.test.ts lib/ai/freshness.test.ts",
+    "test:ai": "tsx --test lib/ai/ai.test.ts lib/ai/config.test.ts lib/ai/freshness.test.ts",
     "db:migrate": "node --env-file=.env.local scripts/database.mjs migrate",
     "db:verify": "node --env-file=.env.local scripts/database.mjs verify",
     "db:advisors": "node --env-file=.env.local scripts/database.mjs advisors",

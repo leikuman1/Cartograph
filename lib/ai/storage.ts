@@ -2,12 +2,13 @@ import "server-only";
 
 import { createClient } from "@supabase/supabase-js";
 import { getEnvironment } from "../env";
+import type { Database } from "../supabase/database.types";
 import { createSupabaseClient } from "../supabase/server";
 import type { AiCache } from "./cache";
 
 export function createAiWriter() {
   const { supabaseUrl, supabaseSecretKey } = getEnvironment();
-  return createClient(supabaseUrl, supabaseSecretKey, {
+  return createClient<Database>(supabaseUrl, supabaseSecretKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
 }

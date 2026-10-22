@@ -3,6 +3,7 @@ import type { AnalysisResult } from "../parser/contract";
 import { foldFolders, compareText } from "../canvas/graph";
 export { roleCandidates } from "./candidates";
 import { PROMPT_VERSION } from "./config";
+import { explanationFolders } from "./paths";
 import { MODEL_ROLES, type ExplainTarget, type ModelRoleRecord } from "./types";
 
 export function explanationContext(analysis: AnalysisResult, target: ExplainTarget) {
@@ -18,6 +19,7 @@ export function explanationContext(analysis: AnalysisResult, target: ExplainTarg
   return {
     target, framework: analysis.framework,
     members: members.map(file => file.path).sort(compareText),
+    folders: explanationFolders(files.map(file => file.path)),
     files: files.map(file => ({ path: file.path, contentHash: file.contentHash, exports: file.exports,
       lineCount: file.lineCount, role: analysis.fileRoles.find(role => role.file === file.path)?.role ?? null })),
     edges,

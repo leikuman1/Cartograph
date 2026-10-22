@@ -1,4 +1,6 @@
+import type { ModelRoleRecord } from "@/lib/ai/types";
 import type { Framework } from "@/lib/frameworks/taxonomy";
+import type { AnalysisResult } from "@/lib/parser/contract";
 import type { AnalysisStatus, PipelineStage } from "@/lib/pipeline/types";
 
 export type { AnalysisStatus };
@@ -116,6 +118,30 @@ export type Database = {
     };
     Views: Record<never, never>;
     Functions: {
+      write_ai_cache: {
+        Args: {
+          p_organization_id: string;
+          p_cache_key: string;
+          p_model: string;
+          p_operation: "file" | "folder" | "classify";
+          p_result: Record<string, unknown>;
+        };
+        Returns: undefined;
+      };
+      write_ai_roles: {
+        Args: { p_analysis_id: string; p_run_id: string; p_model: string; p_roles: ModelRoleRecord[] };
+        Returns: boolean;
+      };
+      store_analysis_with_ai: {
+        Args: {
+          p_analysis_id: string;
+          p_run_id: string;
+          p_result: AnalysisResult;
+          p_model: string | null;
+          p_roles: ModelRoleRecord[];
+        };
+        Returns: boolean;
+      };
       read_ai_roles: {
         Args: { p_analysis_id: string; p_run_id: string; p_model: string };
         Returns: unknown;
@@ -135,6 +161,20 @@ export type Database = {
       rerun_analysis: {
         Args: { p_analysis_id: string };
         Returns: StartAnalysisResult[];
+      };
+      set_analysis_stage: {
+        Args: {
+          p_analysis_id: string;
+          p_run_id: string;
+          p_stage: PipelineStage;
+          p_message: string;
+          p_commit_sha?: string | null;
+        };
+        Returns: boolean;
+      };
+      fail_analysis: {
+        Args: { p_analysis_id: string; p_run_id: string; p_stage: PipelineStage; p_message: string };
+        Returns: boolean;
       };
       read_analysis_result: {
         Args: { p_analysis_id: string; p_run_id: string };

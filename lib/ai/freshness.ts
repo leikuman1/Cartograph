@@ -2,14 +2,24 @@ import type { AnalysisResult } from "../parser/contract";
 import { normalizeRepositoryUrl, readRepositorySource, resolveRepositoryHead } from "../pipeline/repository";
 import type { Freshness } from "./types";
 
+const SOURCE_READ_CONCURRENCY = 4;
+
 export async function repositoryFreshness(repositoryUrl: string, commitSha: string, files: readonly AnalysisResult["files"][number][] = []): Promise<Freshness> {
   try {
     const repository = normalizeRepositoryUrl(repositoryUrl);
     const head = await resolveRepositoryHead(repository);
     const changedFiles: string[] = [];
-    for (const file of files) {
-      const current = await readRepositorySource(repository, head, file.path);
-      if (!current || current.contentHash !== file.contentHash) changedFiles.push(file.path);
+    for (let offset = 0; offset < files.length; offset += SOURCE_READ_CONCURRENCY) {
+      const batch = files.slice(offset, offset + SOURCE_READ_CONCURRENCY);
+      // Settle every in-flight read before returning unknown on a failed batch.
+      const results = await Promise.allSettled(batch.map(async file => {
+        const current = await readRepositorySource(repository, head, file.path);
+        return !current || current.contentHash !== file.contentHash ? file.path : null;
+      }));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+        if (result.value !== null) changedFiles.push(result.value);
+      }
     }
     if (head !== commitSha || changedFiles.length) return {
       status: "stale", head, changedFiles,

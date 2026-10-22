@@ -1,4 +1,19 @@
 import type { ExplanationBlock, ExplanationDocument, ExplanationInline } from "./types";
+import { explanationFolders } from "./paths";
+
+const FRAMEWORK_NAMES = new Set(["next.js", "node.js", "nest.js", "nuxt.js", "vue.js", "express.js", "react.js", "svelte.js"]);
+const SLASH_PROSE = new Set(["and/or", "client/server", "request/response", "read/write", "input/output"]);
+
+function hasUnknownPath(text: string, folders: ReadonlySet<string>) {
+  const references = text.matchAll(/(?:[\p{L}\p{N}_@.-]+\/)+[\p{L}\p{N}_@.-]+|\b[\w.-]+\.(?:[cm]?[jt]sx?|json|ya?ml|md|css|html|vue|svelte)\b/giu);
+  for (const [reference] of references) {
+    if (folders.has(reference) || FRAMEWORK_NAMES.has(reference.toLowerCase()) || SLASH_PROSE.has(reference.toLowerCase())) continue;
+    // HTTP method pairs are ordinary prose, never repository paths.
+    if (/^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)(?:\/(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS))+$/.test(reference)) continue;
+    return true;
+  }
+  return false;
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -10,6 +25,7 @@ function linkText(text: string, kind: "text" | "code" | "strong", paths: readonl
   const nodes: ExplanationInline[] = [];
   let rest = text;
   const ordered = [...paths].sort((a, b) => b.length - a.length);
+  const folders = new Set(explanationFolders(paths));
   while (rest) {
     let start = rest.length;
     let match: string | undefined;
@@ -23,7 +39,7 @@ function linkText(text: string, kind: "text" | "code" | "strong", paths: readonl
       match = path;
     }
     const plain = rest.slice(0, start);
-    if (/(?:[\p{L}\p{N}_@.-]+\/)+[\p{L}\p{N}_@.-]+|\b[\w.-]+\.(?:[cm]?[jt]sx?|json|ya?ml|md|css|html|vue|svelte)\b/iu.test(plain)) {
+    if (hasUnknownPath(plain, folders)) {
       throw new Error("The explanation names a file path that was not supplied to the model. Try Explain again.");
     }
     if (plain) nodes.push({ kind, text: plain });

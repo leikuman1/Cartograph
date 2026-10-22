@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AnalysisResult, FileNode } from "../parser/contract";
 import { cachedOperation, type AiCache } from "./cache";
+import { classificationBatches, classificationOutput, MAX_INPUT_BYTES, optionalClassification } from "./classification";
 import { explanationContext, inputKey, validateRoles } from "./context";
 import { renderableDocument, validateDocument } from "./document";
 import { roleCandidates } from "./candidates";
@@ -75,6 +76,49 @@ test("limited formatting becomes typed nodes and every provided path becomes a f
   assert.throws(() => renderableDocument({ markdown: "Uses `fiction.ts`." }, ["real.ts"]), /not supplied/);
   assert.throws(() => renderableDocument({ markdown: "Uses src/fiction.ts." }, ["fiction.ts"]), /not supplied/);
   assert.throws(() => validateDocument(document, ["src/a.ts"]), /reference/);
+});
+
+test("explanations accept supplied folders and framework prose without admitting unknown paths", () => {
+  const paths = ["a/nested/page.tsx", "a/nested/Node.js", "a/nested/util.ts", "src/index.ts"];
+  const document = renderableDocument({ markdown: "**Next.js** and Node.js use `a/nested` for client/server request/response handling and/or GET/POST routes. Reads src/index.ts." }, paths);
+  assert.deepEqual(validateDocument(document, paths), document);
+  assert.ok(document.blocks[0].children.some(node => node.kind === "strong" && node.text === "Next.js"));
+  assert.ok(document.blocks[0].children.some(node => node.kind === "code" && node.text === "a/nested"));
+  assert.deepEqual(explanationContext(graph(paths), { kind: "file", path: "a/nested/page.tsx" }).folders, ["a", "a/nested"]);
+  for (const text of ["fiction.ts", "src/fiction.ts", "unknown/folder", "src/Next.js", "unknown/a/nested", "a/nested/fiction.ts", "src/index.tsx"]) {
+    assert.throws(() => renderableDocument({ markdown: text }, paths), /not supplied/);
+  }
+  const namedFile = renderableDocument({ markdown: "`Node.js` runs here." }, ["Node.js"]);
+  assert.equal(namedFile.blocks[0].children[0].kind, "file");
+});
+
+test("classification batches fit serialized UTF-8 input and report oversized files", () => {
+  const files = ["one.ts", "large.ts", "two.ts", "three.ts"].map(path => ({ path, contentHash: "a".repeat(64) }));
+  const sources = new Map([
+    ["one.ts", "界".repeat(40000)],
+    ["large.ts", "x".repeat(MAX_INPUT_BYTES)],
+    ["two.ts", "界".repeat(40000)],
+    ["three.ts", "small"],
+  ]);
+  const { batches, oversized } = classificationBatches(files, sources);
+  assert.deepEqual(oversized, ["large.ts"]);
+  assert.deepEqual(batches.map(batch => batch.map(file => file.path)), [["one.ts"], ["two.ts", "three.ts"]]);
+  for (const batch of batches) assert.ok(Buffer.byteLength(JSON.stringify(batch), "utf8") <= MAX_INPUT_BYTES);
+  assert.throws(() => classificationBatches(files, new Map()), /Source is unavailable/);
+});
+
+test("only provider and invalid model output permit optional classification", async () => {
+  const messages: string[] = [];
+  const report = (message: string) => messages.push(message);
+  assert.deepEqual(await optionalClassification(() => classificationOutput(
+    async () => { throw new Error("provider failed"); }, () => []), report), []);
+  assert.deepEqual(await optionalClassification(() => classificationOutput(
+    async () => ({ roles: [] }), () => { throw new Error("invalid roles"); }), report), []);
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /could not complete/);
+  assert.match(messages[1], /invalid AI roles/);
+  await assert.rejects(optionalClassification(async () => { throw new Error("cache failed"); }, report), /cache failed/);
+  assert.equal(messages.length, 2);
 });
 
 test("model roles cannot introduce structural roles or override adapter facts", () => {

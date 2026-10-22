@@ -25,13 +25,20 @@ pnpm dev
 
 ## Explanations, roles and tracing
 
-Set `OPENAI_API_KEY` for model calls. `OPENAI_BASE_URL` accepts an OpenAI-compatible
-proxy such as a local Magpie endpoint. `OPENAI_MODEL` must match the literal
-`PINNED_MODEL` in `lib/ai/config.ts`; repin that value in code when changing the
-model version. The configured proxy must keep that version stable. Cache keys
-include the model, endpoint, prompt version, target contents, complete adjacent
-file metadata and actual edges. A changed model does not reuse another model's
-cache. No model changes the graph or assigns structural route roles.
+Set `OPENAI_API_KEY` and `OPENAI_BASE_URL` together for model calls. The sample
+leaves the endpoint blank: the pinned `workbuddy-ai/deepseek-v4.1-flash` model
+requires an OpenAI-compatible endpoint that serves that exact ID; OpenAI's public
+API does not serve it. Use your provider's documented base URL. Remote endpoints
+require HTTPS; HTTP is accepted only for `localhost`, `127.0.0.1` and `[::1]`.
+URLs cannot include credentials, a query or a fragment. A key without an endpoint
+fails configuration validation.
+
+`OPENAI_MODEL` must match the literal `PINNED_MODEL` in `lib/ai/config.ts`; repin
+that value in code when changing the model version. The configured proxy must
+keep that version stable. Cache keys include the model, endpoint, prompt version,
+target contents, complete adjacent file metadata and actual edges. A changed
+model does not reuse another model's cache. No model changes the graph or assigns
+structural route roles.
 
 Apply the phase 10 database migration before opening analyses with this version.
 New analyses classify files the adapter did not recognize; existing analyses have
@@ -51,9 +58,10 @@ different commit, shows a warning with the existing rerun action. GitHub failure
 show unknown freshness rather than treating the graph as current.
 
 Tracing is optional. Set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` to send
-traces; `LANGSMITH_PROJECT` defaults to `default`. `LANGSMITH_ENDPOINT` can select
-the account's region. The app explicitly targets that project even if the local
-environment also contains Agent tracing variables. The panel states whether
+traces. Copied `.env.example` sets `LANGSMITH_PROJECT=cartograph`; when the variable
+is unset or blank, the code falls back to `default`. `LANGSMITH_ENDPOINT` can
+select the account's region. The app explicitly targets that project even if the
+local environment also contains Agent tracing variables. The panel states whether
 tracing is configured. Every cache read lives inside its outer trace; a hit has
 no model child call and consumes zero tokens.
 
