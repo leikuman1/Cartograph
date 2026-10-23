@@ -3,6 +3,13 @@
 export const PINNED_MODEL = "workbuddy-ai/deepseek-v4.1-flash";
 export const PROMPT_VERSION = "phase10-2";
 
+export function tracingConfiguration() {
+  return {
+    tracingProject: process.env.LANGSMITH_PROJECT?.trim() || "default",
+    tracing: process.env.LANGSMITH_TRACING === "true" && Boolean(process.env.LANGSMITH_API_KEY?.trim()),
+  };
+}
+
 export function aiConfiguration() {
   const model = process.env.OPENAI_MODEL?.trim() || PINNED_MODEL;
   if (model !== PINNED_MODEL) {
@@ -26,9 +33,5 @@ export function aiConfiguration() {
     }
     baseURL = url.href.replace(/\/$/, "");
   }
-  return {
-    model, apiKey, baseURL,
-    tracingProject: process.env.LANGSMITH_PROJECT?.trim() || "default",
-    tracing: process.env.LANGSMITH_TRACING === "true" && Boolean(process.env.LANGSMITH_API_KEY?.trim()),
-  };
+  return { model, apiKey, baseURL, ...tracingConfiguration() };
 }

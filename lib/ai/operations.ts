@@ -36,7 +36,24 @@ export async function generateExplanationAnswer(input: ExplanationInput, prompt 
     const evaluation = evaluateInventedPaths(value.markdown, input.files.map(file => file.path));
     return { markdown: value.markdown, evaluation };
   }, { ...input });
-  if (runId) await recordPathFeedback(runId, answer.evaluation, projectName);
+  if (runId) {
+    // Feedback may finish in the background; a slow tracing service must not
+    // hold an already generated explanation or prevent its cache write.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        recordPathFeedback(runId, answer.evaluation, projectName),
+        new Promise<void>(resolve => {
+          timer = setTimeout(() => {
+            console.error("LangSmith invented-path feedback exceeded the 3-second wait; delivery continues in the background.");
+            resolve();
+          }, 3000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   return answer;
 }
 

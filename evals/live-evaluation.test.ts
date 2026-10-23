@@ -208,4 +208,73 @@ test("real explanation traffic evaluates raw provider answers inside traces and 
     assert.doesNotMatch(JSON.stringify(result.value), /invented/);
     assert.equal(feedback.at(-1)?.score, 0);
   });
+
+  await t.test("completed feedback clears its deadline timer", async check => {
+    check.mock.timers.enable({ apis: ["setTimeout"] });
+    const errors: string[] = [];
+    check.mock.method(console, "error", (message: string) => { errors.push(message); });
+    markdown = "`src/entry.ts` delegates to `src/service.ts`.";
+    const { cache, values } = memoryCache();
+    await explainSnapshot(analysis, target, cache, readSource);
+    assert.equal(values.size, 1);
+    check.mock.timers.tick(3000);
+    assert.deepEqual(errors, [], "Completed feedback must leave no timeout callback behind.");
+  });
+
+  for (const delivery of ["success", "failure"] as const) {
+    await t.test(`slow feedback releases the answer and cache before background ${delivery}`, async check => {
+      check.mock.timers.enable({ apis: ["setTimeout"] });
+      const errors: string[] = [];
+      check.mock.method(console, "error", (message: string) => { errors.push(message); });
+      let releaseFeedback = () => {};
+      const blocked = new Promise<void>(resolve => { releaseFeedback = resolve; });
+      let signalStarted = () => {};
+      const started = new Promise<void>(resolve => { signalStarted = resolve; });
+      let signalFinished = () => {};
+      const finished = new Promise<void>(resolve => { signalFinished = resolve; });
+      check.mock.method(Client.prototype, "createFeedback", async (value: typeof feedback[number]) => {
+        signalStarted();
+        await blocked;
+        try {
+          if (delivery === "failure") throw new Error("Synthetic delayed feedback failure");
+          feedback.push(value);
+          return value;
+        } finally {
+          signalFinished();
+        }
+      });
+      markdown = "`src/entry.ts` delegates to `src/service.ts`.";
+      const { cache, values } = memoryCache();
+      let returned = false;
+      const explanation = explainSnapshot(analysis, target, cache, readSource).then(result => {
+        returned = true;
+        return result;
+      });
+      await started;
+      check.mock.timers.tick(2999);
+      await Promise.resolve();
+      assert.equal(returned, false);
+      assert.equal(values.size, 0);
+      check.mock.timers.tick(1);
+      const result = await explanation;
+      assert.equal(result.cacheHit, false);
+      assert.equal(returned, true);
+      assert.equal(values.size, 1, "A slow feedback upload must not prevent the cache write.");
+      const { evaluation } = answerRun();
+      assert.equal(evaluation.score, 1, "The raw evaluation is recorded before feedback is uploaded.");
+      assert.equal(errors.length, 1);
+      assert.match(errors[0], /3-second wait/);
+      releaseFeedback();
+      await finished;
+      await Promise.resolve();
+      if (delivery === "failure") {
+        assert.equal(errors.length, 2);
+        assert.match(errors[1], /feedback upload failed/);
+      } else {
+        assert.deepEqual(JSON.parse(feedback.at(-1)?.comment ?? "null"), evaluation);
+      }
+      check.mock.timers.tick(3000);
+      assert.equal(errors.filter(message => message.includes("3-second wait")).length, 1);
+    });
+  }
 });

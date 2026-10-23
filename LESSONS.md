@@ -345,3 +345,50 @@ AI tests exercise the classification operation with a cached first batch and a
 failing provider or invalid second response, asserting the first roles survive
 and no third batch starts. They also check first-batch failure, missing source,
 cache reads and writes, and malformed cached roles.
+
+## 17. Optional telemetry has a bounded wait
+
+### Problem
+
+An already-generated explanation waited for trace flushing, a project lookup and
+feedback upload before rendering or writing its cache. A slow LangSmith request
+could hold up all of that work.
+
+### Root Cause
+
+Catching upload failures bounded the effect of an error, but not the time spent
+waiting for the optional integration.
+
+### Rule
+
+Bound how long the caller waits for optional telemetry. Clear its deadline timer
+on completion, preserve the local result, and handle eventual background failure.
+A timeout stops waiting; it does not cancel delivery.
+
+### Verification
+
+Live-evaluation tests use mocked time and delayed feedback to verify answer and
+cache delivery at the deadline, eventual success and failure, and timer cleanup.
+
+## 18. Validate configuration for the operation being performed
+
+### Problem
+
+Recent deterministic path evals failed when model settings were incomplete or
+invalid, despite requiring only recorded LangSmith inputs and outputs.
+
+### Root Cause
+
+Tracing settings were accessed through the model configuration validator, coupling
+an independent operation to credentials and a model it never used.
+
+### Rule
+
+Keep tracing configuration independently readable. Commands that generate model
+output still validate the full model configuration; recorded deterministic checks
+validate only the services they use.
+
+### Verification
+
+CLI regression checks run recent path evaluation with invalid model settings and
+mocked LangSmith records, while model eval commands still reject those settings.

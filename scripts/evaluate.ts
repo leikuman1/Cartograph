@@ -1,7 +1,7 @@
 import "./load-env";
 import { pathToFileURL } from "node:url";
 import { Client } from "langsmith";
-import { aiConfiguration } from "../lib/ai/config";
+import { aiConfiguration, tracingConfiguration } from "../lib/ai/config";
 import { flushTraces } from "../lib/ai/client";
 import { evaluateInventedPaths } from "../lib/ai/path-evaluation";
 import { comparePrompts, evaluateRoles } from "../evals/experiments";
@@ -61,9 +61,11 @@ export async function run(values: readonly string[]) {
     if (!evaluation.score) process.exitCode = 1;
     return;
   }
-  const config = aiConfiguration();
+  const config = tracingConfiguration();
   if (!config.tracing) throw new Error("Set LANGSMITH_TRACING=true and LANGSMITH_API_KEY in .env.local before running recorded evals.");
-  if (args.command !== "paths" && !config.apiKey) throw new Error("Set OPENAI_API_KEY and OPENAI_BASE_URL in .env.local before running model evals.");
+  if (args.command === "roles" || args.command === "prompts") {
+    if (!aiConfiguration().apiKey) throw new Error("Set OPENAI_API_KEY and OPENAI_BASE_URL in .env.local before running model evals.");
+  }
   const client = new Client({ timeout_ms: 15000 });
   try {
     if (args.command === "roles") await evaluateRoles(client);

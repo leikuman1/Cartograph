@@ -106,7 +106,9 @@ it cannot identify arbitrary filenames mentioned without recognizable path synta
 The app also evaluates every newly generated raw explanation before formatting,
 including answers rejected by the renderer. With tracing enabled, the answer and
 evidence are saved in the `explanation-answer` trace and uploaded as feedback.
-Feedback-upload failures are logged; the evaluation stays in the trace output.
+Feedback uploads wait at most three seconds before releasing the explanation
+and its cache write; delivery can continue in the background after that deadline.
+Timeouts and upload failures are logged; the evaluation stays in the trace output.
 Cache hits retain their existing zero-model-call behavior. Tracing disabled means
 no remote feedback is sent.
 
@@ -129,10 +131,11 @@ states which version scored higher, or a tie; model judgments and generation
 variance limit that conclusion. Failed runs or missing scores stop the command;
 partial results are never silently averaged.
 
-Recorded evals require `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY`; role and
-prompt experiments also require the existing model key and endpoint. They send
-fixture or recorded repository inputs to the configured services and consume
-model tokens. Experiments use in-memory caches inside their traces; they never
+Recorded evals require `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY`. Recent
+path checks work even with absent or invalid model settings; role and prompt
+experiments still validate the pinned model, existing model key and endpoint.
+Those experiments send fixture or recorded repository inputs to the configured
+services and consume model tokens. Experiments use in-memory caches inside their traces; they never
 read or write application database rows. Experiment traffic is excluded from the
 recent-production selection. Run these live commands for the phase 11 acceptance
 check; `test:evals` uses local fixtures and mocked services only.
