@@ -1,3 +1,4 @@
+import "./load-env";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Client } from "langsmith";
