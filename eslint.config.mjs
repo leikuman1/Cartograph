@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Repository archives and local tooling output are data, never app source.
+    "tmp/**",
+    "temp/**",
   ]),
 ]);
 
