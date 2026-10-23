@@ -1,18 +1,23 @@
 "use client";
 
 import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { FileNode, FileRoleRecord, GraphEdge } from "@/lib/parser/contract";
-import { categoriesForFramework, categoryForFile, FRAMEWORK_LABELS, type Framework } from "@/lib/frameworks/taxonomy";
+import type { FileNode, GraphEdge } from "@/lib/parser/contract";
+import { categoriesForDisplay, categoryForFile, FRAMEWORK_LABELS, type DisplayRoleRecord, type Framework } from "@/lib/frameworks/taxonomy";
+import type { AiPanelContext, ExplainTarget, Freshness, ModelRoleRecord } from "@/lib/ai/types";
 import type { FolderGroup, Selection } from "@/lib/canvas/graph";
 import { countFileCategories, importedFileCounts, type RepositoryDetails } from "@/lib/canvas/details";
 import { TRAVERSAL_DEPTH, traverse, type EntryReason, type Insights, type TraversalDirection } from "@/lib/canvas/insights";
 import CategoryMark, { CategorySymbol } from "./category-mark";
 import InsightsPanel from "./insights-panel";
+import ExplanationPanel from "./explanation-panel";
 
 type DetailPanelProps = {
   repositoryName: string;
+  aiContext: AiPanelContext;
+  freshness: Freshness;
+  modelRoles?: readonly ModelRoleRecord[];
   framework: Framework;
-  fileRoles: readonly FileRoleRecord[];
+  fileRoles: readonly DisplayRoleRecord[];
   routeCount: number;
   details: RepositoryDetails;
   files: readonly FileNode[];
@@ -24,7 +29,7 @@ type DetailPanelProps = {
   insights: Insights;
   hoveredFiles: ReadonlySet<string>;
   hoveredFolder: string | null;
-  onSelect: (path: string) => void;
+  onSelect: (path: string, focusInMap?: boolean) => void;
   onHover: (selection: Selection) => void;
   onClear: () => void;
 };
@@ -32,12 +37,12 @@ type DetailPanelProps = {
 function FileList({ title, files, fileRoles, counts, empty, scrollable = false, hoveredFiles, onSelect, onHover }: {
   title: string;
   files: readonly FileNode[];
-  fileRoles: readonly FileRoleRecord[];
+  fileRoles: readonly DisplayRoleRecord[];
   counts?: ReadonlyMap<string, number>;
   empty: string;
   scrollable?: boolean;
   hoveredFiles: ReadonlySet<string>;
-  onSelect: (path: string) => void;
+  onSelect: (path: string, focusInMap?: boolean) => void;
   onHover: (selection: Selection) => void;
 }) {
   return <section className="detail-section">
@@ -59,15 +64,17 @@ function Facts({ children }: { children: ReactNode }) {
   return <dl className="detail-facts">{children}</dl>;
 }
 
-export default function DetailPanel({ repositoryName, framework, fileRoles, routeCount, details, files, edges, edgeCount, selection, group, entryExclusions, insights, hoveredFiles, hoveredFolder, onSelect, onHover, onClear }: DetailPanelProps) {
+export default function DetailPanel({ repositoryName, aiContext, freshness, modelRoles, framework, fileRoles, routeCount, details, files, edges, edgeCount, selection, group, entryExclusions, insights, hoveredFiles, hoveredFolder, onSelect, onHover, onClear }: DetailPanelProps) {
   const [tab, setTab] = useState<"structure" | "explanation">("structure");
   const [traversal, setTraversal] = useState<TraversalDirection | null>(null);
   const id = useId();
   const structureTab = useRef<HTMLButtonElement>(null);
   const explanationTab = useRef<HTMLButtonElement>(null);
-  const categories = categoriesForFramework(framework);
+  const categories = categoriesForDisplay(framework, fileRoles);
   const selected = selection?.kind === "file" ? details.byPath.get(selection.path) : undefined;
   const category = selected ? categoryForFile(selected.file.path, fileRoles) : undefined;
+  const modelRole = selected ? modelRoles?.find(role => role.file === selected.file.path && role.contentHash === selected.file.contentHash && role.role === category?.id) : undefined;
+  const target: ExplainTarget | null = selected ? { kind: "file", path: selected.file.path } : group ? { kind: "folder", path: group.path } : null;
   const members = group ? countFileCategories(group.files, fileRoles) : null;
   const counts = useMemo(() => new Map(importedFileCounts(files, edges).map(file => [file.path, file.importerCount])), [edges, files]);
   const walk = useMemo(() => selected && traversal ? traverse(files, edges, selected.file.path, traversal) : null, [edges, files, selected, traversal]);
@@ -95,8 +102,13 @@ export default function DetailPanel({ repositoryName, framework, fileRoles, rout
         onFocus={() => onHover({ kind: "file", path: selected.file.path })} onBlur={() => onHover(null)}>
         <CategoryMark path={selected.file.path} fileRoles={fileRoles} /><span className="detail-path">{selected.file.path}</span>
       </button> : group ? <p className={`detail-folder-path ${hoveredFolder === group.id ? "is-hovered" : ""}`}>{group.path}</p> : <p className="detail-repository-name">{repositoryName}</p>}
-      {tab === "explanation" ? <section className="detail-empty"><h3>No explanation yet</h3><p>Explanations will appear here once generated. No explanation has been generated for this {title.toLowerCase()}.</p></section> : selected ? <>
+      <div hidden={tab !== "explanation"}>
+        <ExplanationPanel target={target} context={aiContext} freshness={freshness} onSelect={onSelect} />
+      </div>
+      <div hidden={tab !== "structure"}>
+      {selected ? <>
         <Facts><dt>Kind</dt><dd>{category?.label}</dd><dt>Length</dt><dd>{selected.file.lineCount} lines</dd><dt>Dependencies</dt><dd>{selected.dependencies.length}</dd><dt>Dependents</dt><dd>{selected.dependents.length}</dd></Facts>
+        {modelRole && <p className="detail-note">Role suggested by AI: {modelRole.role}.</p>}
         {category?.id === "source" && <p className="detail-note">Source is the fallback kind; no framework role, test, or declaration convention matched.</p>}
         <section className="detail-section">
           <div className="traversal-buttons" role="group" aria-label="Graph traversal">
@@ -131,7 +143,7 @@ export default function DetailPanel({ repositoryName, framework, fileRoles, rout
         <FileList title="Files in this folder" files={group.files} empty="No parsed files." {...listProps} />
       </> : <>
         <Facts><dt>Framework</dt><dd>{FRAMEWORK_LABELS[framework]}</dd><dt>Files</dt><dd>{details.byPath.size}</dd><dt>Import edges</dt><dd>{edgeCount}</dd><dt>Routes</dt><dd>{routeCount}</dd></Facts>
-        <p className="detail-note">{framework === "generic" ? "No supported framework was detected. Files use generic kinds." : "File roles come from the detected framework adapter."} Only fully recovered HTTP methods and paths appear in Routes.</p>
+        <p className="detail-note">{framework === "generic" ? "No supported framework was detected." : "Framework roles come from the detected adapter."} {modelRoles?.length ? "Additional roles are suggested by AI." : "Files without a role use generic kinds."} Only fully recovered HTTP methods and paths appear in Routes.</p>
         <p className="detail-note">Counts below are distinct files connected by resolved imports.</p>
         <FileList title="Most depended on" files={details.mostImported.map(item => item.file)} counts={counts} empty="No files have dependents." scrollable {...listProps} />
         <p className="detail-note">Sorted by dependent count, then file path.</p>
@@ -141,6 +153,7 @@ export default function DetailPanel({ repositoryName, framework, fileRoles, rout
         <p className="detail-note">{excludedEntries} files with no importers are treated as framework or tool entry points and left out of the unimported insight ({entryExclusions.test} tests, {entryExclusions.config} configs, {entryExclusions["framework-entry"]} framework entries, {entryExclusions["ambient-declaration"]} declarations).</p>
         <InsightsPanel insights={insights} fileRoles={fileRoles} hoveredFiles={hoveredFiles} onSelect={onSelect} onHover={onHover} />
       </>}
+      </div>
     </div>
   </aside>;
 }

@@ -1,10 +1,10 @@
-import type { FileRoleRecord } from "@/lib/parser/contract";
+import type { DisplayRoleRecord } from "@/lib/frameworks/taxonomy";
 import { categoryForFile, type CategoryDefinition } from "@/lib/frameworks/taxonomy";
 
 export function CategorySymbol({ category }: { category: CategoryDefinition }) {
   return <span className={`category-mark category-${category.id}`} title={`${category.label}: ${category.description}`}>{category.code}</span>;
 }
 
-export default function CategoryMark({ path, fileRoles }: { path: string; fileRoles: readonly FileRoleRecord[] }) {
+export default function CategoryMark({ path, fileRoles }: { path: string; fileRoles: readonly DisplayRoleRecord[] }) {
   return <CategorySymbol category={categoryForFile(path, fileRoles)} />;
 }

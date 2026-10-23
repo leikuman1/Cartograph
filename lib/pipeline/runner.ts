@@ -7,12 +7,17 @@ import { prepareAnalysisForStorage } from "@/lib/parser/serialization";
 import { getEnvironment } from "@/lib/env";
 import { fetchRepository, normalizeRepositoryUrl } from "./repository";
 import type { PipelineStage } from "./types";
+import { aiConfiguration } from "@/lib/ai/config";
+import { classifySnapshot } from "@/lib/ai/operations";
+import { pipelineCache } from "@/lib/ai/storage";
+import { flushTraces } from "@/lib/ai/client";
+import type { Database } from "@/lib/supabase/database.types";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
 function createAdminClient() {
   const { supabaseUrl, supabaseSecretKey } = getEnvironment();
-  return createClient(supabaseUrl, supabaseSecretKey, {
+  return createClient<Database>(supabaseUrl, supabaseSecretKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
 }
@@ -75,12 +80,26 @@ export async function runAnalysis(analysisId: string, runId: string, repositoryU
       `Parsed ${result.files.length} files and resolved ${result.edges.length} edges`,
     );
 
+    const config = aiConfiguration();
+    let roles: Awaited<ReturnType<typeof classifySnapshot>> = [];
+    if (config.apiKey) {
+      await stage(client, analysisId, runId, "parse", "Assigning nonstructural roles to unrecognized files");
+      const { data: claimed, error: claimError } = await client.from("analyses").select("organization_id")
+        .eq("id", analysisId).eq("run_id", runId).single();
+      if (claimError || !claimed) throw new Error("The analysis run could not be verified for classification.");
+      // Classification keeps completed batches on model failure; the saved map
+      // reports how many files remain without a role.
+      roles = await classifySnapshot(result, new Map(discovery.sourceFiles.map(file => [file.path, file.content])),
+        pipelineCache(claimed.organization_id, config.model));
+    }
     current = "store";
     await stage(client, analysisId, runId, "store", "Storing the dependency map");
-    const { data, error } = await client.rpc("store_analysis", {
+    const { data, error } = await client.rpc("store_analysis_with_ai", {
       p_analysis_id: analysisId,
       p_run_id: runId,
       p_result: prepareAnalysisForStorage(result),
+      p_model: config.apiKey ? config.model : null,
+      p_roles: roles,
     });
     if (error) throw new Error(`The dependency map could not be stored: ${error.message}`);
     if (data !== true) throw new RunSuperseded();
@@ -101,6 +120,7 @@ export async function runAnalysis(analysisId: string, runId: string, repositoryU
       });
     }
   } finally {
+    await flushTraces().catch(() => console.error("LangSmith traces could not be flushed. Check the tracing configuration."));
     await fetched?.cleanup().catch(error => {
       console.error("Temporary repository cleanup failed", error instanceof Error ? error.message : error);
     });

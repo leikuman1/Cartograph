@@ -23,6 +23,56 @@ paths are `/sign-in` and `/sign-up`; every enabled method finishes at `/`.
 pnpm dev
 ```
 
+## Explanations, roles and tracing
+
+Set `OPENAI_API_KEY` and `OPENAI_BASE_URL` together for model calls. The sample
+leaves the endpoint blank: the pinned `workbuddy-ai/deepseek-v4.1-flash` model
+requires an OpenAI-compatible endpoint that serves that exact ID; OpenAI's public
+API does not serve it. Use your provider's documented base URL. Remote endpoints
+require HTTPS; HTTP is accepted only for `localhost`, `127.0.0.1` and `[::1]`.
+URLs cannot include credentials, a query or a fragment. A key without an endpoint
+fails configuration validation.
+
+`OPENAI_MODEL` must match the literal `PINNED_MODEL` in `lib/ai/config.ts`; repin
+that value in code when changing the model version. The configured proxy must
+keep that version stable. Cache keys include the model, endpoint, prompt version,
+target contents, complete adjacent file metadata and actual edges. A changed
+model does not reuse another model's cache. No model changes the graph or assigns
+structural route roles.
+
+Apply the phase 10 database migration before opening analyses with this version.
+New analyses classify files the adapter did not recognize; existing analyses have
+an **Assign AI roles** button. Roles are separate annotations tied to file hashes
+and the completed run. Source, Tests and Declarations remain distinct from adapter
+facts. If no model key is set, parsing still works and AI actions explain what
+configuration is missing.
+
+In the detail panel, select **Explanation**, then **Explain** for a file or folded
+folder. The panel remembers previously displayed answers while switching objects
+or tabs. Every explicit Explain click reaches the server trace, including cache
+hits. Explanations support inline code, bold and bullets; file paths reveal their
+real file in the map. Source is fetched from the analyzed commit and checked
+against the stored SHA-256. Page reload checks current repository HEAD; Explain
+also checks the selected files' current hashes. A changed or deleted file, or a
+different commit, shows a warning with the existing rerun action. GitHub failures
+show unknown freshness rather than treating the graph as current.
+
+Tracing is optional. Set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` to send
+traces. Copied `.env.example` sets `LANGSMITH_PROJECT=cartograph`; when the variable
+is unset or blank, the code falls back to `default`. `LANGSMITH_ENDPOINT` can
+select the account's region. The app explicitly targets that project even if the
+local environment also contains Agent tracing variables. The panel states whether
+tracing is configured. Every cache read lives inside its outer trace; a hit has
+no model child call and consumes zero tokens.
+
+`pnpm test:ai` checks context, cache boundaries, safe formatting, roles and
+freshness without credentials. `node --env-file=.env.local --import tsx
+scripts/verify-ai.ts` performs live explanation/classification calls using only a
+synthetic one-file fixture, checks a repeat cache hit and reads its zero-token
+LangSmith record when configured. Explanations have a 240 KB complete-input limit
+and source reads a 1 MiB per-file limit; an oversized input fails explicitly
+instead of dropping neighbors or truncating source.
+
 ## Clerk configuration
 
 In Clerk Dashboard, under **Organizations > Settings**:
@@ -88,7 +138,7 @@ pnpm db:advisors
 ```
 
 All schema changes belong in `supabase/migrations/`; create later migration files
-with `pnpm exec supabase migration new <name>`. The eight public business tables
+with `pnpm exec supabase migration new <name>`. Public business and AI cache tables
 have direct organization cascade foreign keys and read-only RLS for authenticated
 users. The private schema holds the organization registry and declared progress
 channel pattern. References between business tables preserve organization and
@@ -265,13 +315,15 @@ pnpm lint
 pnpm test:parser
 pnpm test:pipeline
 pnpm test:environment
+pnpm test:ai
 pnpm build
 node --test scripts/organizations.test.mjs
 pnpm db:verify
 pnpm db:advisors
 ```
 
-Run the phase 9 browser acceptance check in `docs/specs/phrase-09.md` manually.
+Run the phase 10 browser acceptance check in `docs/specs/phrase-10.md` manually.
+The phase 9 CommonJS and Express checks remain manual as well.
 The phase 8 framework checks and phase 7 progress checks, including watching
 progress from a second tab, remain manual.
 The workspace derives its organization from the server session, and switching

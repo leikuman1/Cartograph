@@ -5,8 +5,11 @@ import {
   BaseEdge, Controls, Handle, Position, ReactFlow, ReactFlowProvider,
   useReactFlow, useStore, useUpdateNodeInternals, type Edge, type EdgeProps, type Node, type NodeProps,
 } from "@xyflow/react";
-import type { AnalysisResult, FileNode, FileRoleRecord } from "@/lib/parser/contract";
-import { categoriesForFramework, categoryForFile, FRAMEWORK_LABELS, type CategoryDefinition } from "@/lib/frameworks/taxonomy";
+import type { AnalysisResult, FileNode } from "@/lib/parser/contract";
+import { categoriesForDisplay, categoryForFile, displayRoles, FRAMEWORK_LABELS, type CategoryDefinition, type DisplayRoleRecord } from "@/lib/frameworks/taxonomy";
+import type { AiPanelContext, Freshness, ModelRoleRecord } from "@/lib/ai/types";
+import { roleCandidates } from "@/lib/ai/candidates";
+import { classify } from "@/app/(workspace)/analyses/[id]/explain-actions";
 import {
   foldFolders, FILE_ROW_HEIGHT, PANEL_HEADER_HEIGHT,
   ROWS_PER_PANEL, panelFiles, selectionContext, shortestUniqueLabels, visibleConnections,
@@ -35,7 +38,7 @@ type FolderData = {
   hovered: boolean;
   hoveredFiles: ReadonlySet<string>;
   category: CategoryDefinition | null;
-  fileRoles: readonly FileRoleRecord[];
+  fileRoles: readonly DisplayRoleRecord[];
   matchingFiles: ReadonlySet<string> | null;
   onToggle: (id: string) => void;
   onSelect: (path: string) => void;
@@ -49,6 +52,9 @@ type CanvasProps = {
   repositoryName: string;
   repositoryUrl: string | null;
   commitSha: string | null;
+  aiContext: AiPanelContext;
+  freshness: Freshness;
+  initialModelRoles: ModelRoleRecord[];
 };
 
 function Ports({ top, suffix = "" }: { top: number | string; suffix?: string }) {
@@ -146,7 +152,7 @@ function ImportConnection(props: EdgeProps<ImportEdge>) {
 const nodeTypes = { folder: Folder };
 const edgeTypes = { import: ImportConnection };
 
-function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect: (path: string, focusInMap?: boolean) => void }) {
+function FileTable({ analysis, fileRoles, onSelect }: { analysis: AnalysisResult; fileRoles: readonly DisplayRoleRecord[]; onSelect: (path: string, focusInMap?: boolean) => void }) {
   const imports = useMemo(() => {
     const result = new Map<string, string[]>();
     for (const edge of analysis.edges) {
@@ -162,7 +168,7 @@ function FileTable({ analysis, onSelect }: { analysis: AnalysisResult; onSelect:
     <tbody>{analysis.files.map(file => <tr key={file.path}>
       {/* Keyboard activation reports detail 0; only then does the unmounted table need to hand focus to the map. */}
       <td><button type="button" onClick={event => onSelect(file.path, event.detail === 0)} className="table-file">{file.path}</button></td>
-      <td><CategoryMark path={file.path} fileRoles={analysis.fileRoles} /> {categoryForFile(file.path, analysis.fileRoles).label}</td>
+      <td><CategoryMark path={file.path} fileRoles={fileRoles} /> {categoryForFile(file.path, fileRoles).label}</td>
       <td>{file.fanIn}</td><td>{file.fanOut}</td>
       <td>{file.fanOut > 0 ? <details><summary>{file.fanOut} dependencies</summary>{imports.get(file.path)?.map(target => <p key={target} className="font-mono">{target}</p>)}</details> : "—"}</td>
     </tr>)}</tbody>
@@ -189,10 +195,15 @@ function RouteTable({ analysis, repositoryUrl, commitSha, onSelect }: Pick<Canva
   </div>;
 }
 
-function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasProps) {
-  const categories = categoriesForFramework(analysis.framework);
+function Canvas({ analysis, repositoryName, repositoryUrl, commitSha, aiContext, freshness, initialModelRoles }: CanvasProps) {
+  const [modelRoles, setModelRoles] = useState(initialModelRoles);
+  const [classifying, setClassifying] = useState(false);
+  const [roleError, setRoleError] = useState<string | null>(null);
+  const fileRoles = useMemo(() => displayRoles(analysis.fileRoles, modelRoles), [analysis.fileRoles, modelRoles]);
+  const categories = categoriesForDisplay(analysis.framework, fileRoles);
+  const unclassified = roleCandidates(analysis).filter(file => !modelRoles.some(role => role.file === file.path)).length;
   const folded = useMemo(() => foldFolders(analysis.files, analysis.edges), [analysis]);
-  const details = useMemo(() => repositoryDetails(analysis.files, analysis.edges, analysis.fileRoles), [analysis]);
+  const details = useMemo(() => repositoryDetails(analysis.files, analysis.edges, fileRoles), [analysis, fileRoles]);
   const insights = useMemo(() => buildInsights(analysis.files, analysis.edges, analysis.framework, analysis.fileRoles, analysis.frameworkEntries), [analysis]);
   const entryExclusions = useMemo(() => entryExclusionCounts(analysis.files.filter(file => file.fanIn === 0), analysis.framework, analysis.fileRoles, analysis.frameworkEntries), [analysis.files, analysis.framework, analysis.fileRoles, analysis.frameworkEntries]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -200,7 +211,7 @@ function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasPr
   const [selection, setSelection] = useState<Selection>(null);
   const [hover, setHover] = useState<Selection>(null);
   const [category, setCategory] = useState<CategoryDefinition | null>(null);
-  const matchingFiles = useMemo(() => category ? new Set(analysis.files.filter(file => categoryForFile(file.path, analysis.fileRoles).id === category.id).map(file => file.path)) : null, [analysis.files, analysis.fileRoles, category]);
+  const matchingFiles = useMemo(() => category ? new Set(analysis.files.filter(file => categoryForFile(file.path, fileRoles).id === category.id).map(file => file.path)) : null, [analysis.files, fileRoles, category]);
   const [view, setView] = useState<"map" | "table" | "routes">("map");
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [ready, setReady] = useState(false);
@@ -302,7 +313,7 @@ function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasPr
       style: { width: position.width, height: position.height, pointerEvents: "all" },
       data: { group, label: position.label, labels, open: expanded.has(group.id), page, rows: panelFiles(group, page),
         dimmed: (selection !== null && !context.visibleGroups.has(group.id)) || (matchingFiles !== null && !group.files.some(file => matchingFiles.has(file.path))),
-        selection, related: context.visibleFiles, hovered: hoveredFolder === group.id, hoveredFiles, category, fileRoles: analysis.fileRoles, matchingFiles,
+        selection, related: context.visibleFiles, hovered: hoveredFolder === group.id, hoveredFiles, category, fileRoles, matchingFiles,
         onToggle: toggle, onSelect: selectFile, onPage: changePage, onHover: setHover },
     };
   });
@@ -331,6 +342,16 @@ function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasPr
         onClick={() => setCategory(category?.id === item.id ? null : item)}>
         <CategorySymbol category={item} /><span>{item.label}</span><span className="category-count">{categoryCounts.get(item.id) ?? 0}</span>
       </button>)}
+      {unclassified > 0 && <div className="sidebar-section"><p>{unclassified} files without a role</p><button type="button" className="control" disabled={classifying} onClick={async () => {
+        setClassifying(true);
+        setRoleError(null);
+        try {
+          const result = await classify(aiContext);
+          if (result.error) setRoleError(result.error);
+          else setModelRoles(result.roles);
+        } catch { setRoleError("File roles could not be assigned. Try again."); }
+        finally { setClassifying(false); }
+      }}>{classifying ? "Assigning roles…" : "Assign AI roles"}</button>{roleError && <p role="alert">{roleError}</p>}</div>}
       <p className="sidebar-filter-note">{category ? `Dimming files that are not ${category.label.toLowerCase()}. Click again to clear.` : "Click a kind to dim the rest."}</p>
       <div className="sidebar-section"><h2>Reading the map</h2><p>Height = dependents</p><p>Width = label length</p><p>In / out = distinct files</p><p>Arrow → dependency</p>
         <p><span className="direction-mark incoming" /> Incoming</p><p><span className="direction-mark outgoing" /> Outgoing</p>
@@ -359,12 +380,12 @@ function Canvas({ analysis, repositoryName, repositoryUrl, commitSha }: CanvasPr
             <Controls showInteractive={false} showFitView={false} />
           </ReactFlow>
         </div>
-        {view === "table" && <FileTable analysis={analysis} onSelect={revealFile} />}
+        {view === "table" && <FileTable analysis={analysis} fileRoles={fileRoles} onSelect={revealFile} />}
         {view === "routes" && <RouteTable analysis={analysis} repositoryUrl={repositoryUrl} commitSha={commitSha} onSelect={revealFile} />}
       </div>
       <footer className="map-status"><span title={selectedLabel ?? undefined}>{selectedLabel ?? "Click a folder to expand · select a file to trace imports"}</span>{selection && <button type="button" onClick={clearSelection}>Clear selection</button>}<span>{Math.round(zoom * 100)}%</span></footer>
     </section>
-    <DetailPanel repositoryName={repositoryName} framework={analysis.framework} fileRoles={analysis.fileRoles} routeCount={analysis.routes.length} details={details} files={analysis.files} edges={analysis.edges}
+    <DetailPanel aiContext={aiContext} freshness={freshness} modelRoles={modelRoles} repositoryName={repositoryName} framework={analysis.framework} fileRoles={fileRoles} routeCount={analysis.routes.length} details={details} files={analysis.files} edges={analysis.edges}
       edgeCount={analysis.edges.length} selection={selection} entryExclusions={entryExclusions} insights={insights}
       group={selection?.kind === "folder" ? folded.groups.find(group => group.id === selection.id) : undefined}
       hoveredFiles={hoveredFiles} hoveredFolder={hoveredFolder ?? null} onSelect={revealFile} onHover={setHover} onClear={clearSelection} />

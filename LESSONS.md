@@ -297,3 +297,51 @@ all duplicate, coverage, endpoint and fan-count checks.
 `lib/parser/serialization.test.ts` exercises Unicode paths, edge targets and route
 patterns, validates special-entry storage round trips, and rejects malformed
 transport order and graph data. The original standalone edge bytes stay intact.
+
+## 15. Model wording must respect the renderer's path contract
+
+### Problem
+The controllers folder explanation failed twice even though its repository file
+references were valid. Ordinary shorthand such as `author/genre` and `GET/POST`
+matched the renderer's unknown-path check.
+
+### Root Cause
+The prompt restricted invented file paths but still allowed slash-separated prose.
+The renderer cannot reliably distinguish that prose from an unprovided path.
+
+### Rule
+When output syntax has a strict validator, describe that syntax in the prompt too.
+Reserve slashes for exact supplied file paths and spell prose alternatives with
+"and" or "or". Version the prompt change in the cache identity; keep the unknown-path
+check intact. When checking surrounding prose, preserve exact references and allow
+at most one sentence-ending period; never strip trailing hyphens or multiple dots.
+
+### Verification
+BrowserOS Neo generated the full controllers folder explanation after the prompt
+change. A repeat click hit the persistent cache; its LangSmith trace had no model
+call. AI tests reject unprovided paths and cover punctuation, literal trailing-dot
+names and unknown paths ending with hyphens or repeated dots. Types, lint and build
+pass.
+
+## 16. Optional batch failure preserves completed work
+
+### Problem
+A later AI classification batch could fail after earlier batches had succeeded.
+The outer recovery boundary returned an empty list, so those valid roles were
+cached but never attached to the saved analysis.
+
+### Root Cause
+Recovery surrounded the entire classification operation instead of the batch
+that could fail. Both automatic and explicit assignment lost the accumulated
+results.
+
+### Rule
+Catch a known optional failure where partial results are still available. Stop
+later batches and return validated completed results; keep source, cache and
+database failures fatal.
+
+### Verification
+AI tests exercise the classification operation with a cached first batch and a
+failing provider or invalid second response, asserting the first roles survive
+and no third batch starts. They also check first-batch failure, missing source,
+cache reads and writes, and malformed cached roles.

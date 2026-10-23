@@ -111,8 +111,29 @@
 .detail-file-link.is-hovered, .detail-folder-path.is-hovered { background: var(--selected-surface); outline: 1px solid var(--accent); outline-offset: -1px; }
 .detail-kind-list { margin-top: 8px; }
 .detail-kind-list li { display: flex; align-items: center; gap: 7px; padding: 4px 3px; }
-.detail-empty { margin-top: 18px; color: var(--muted); }
-.detail-empty h3 { font-weight: 600; font-size: 11px; color: var(--foreground); margin-bottom: 6px; }
+.explanation-panel { font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.explanation-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.explanation-trigger.control { padding: 3px 8px; font-size: 11px; }
+.explanation-status, .explanation-meta, .explanation-note { color: var(--muted); font-size: 11px; }
+.explanation-meta { margin-top: 4px; }
+.explanation-meta code, .explanation-document code, .explanation-file { font: 11px/1.7 var(--font-geist-mono), monospace; }
+.explanation-note { margin-top: 12px; }
+.explanation-panel > .explanation-note:first-child { margin-top: 0; }
+.explanation-freshness { margin-top: 12px; padding: 8px 0 8px 8px; border-left: 2px solid var(--outgoing); }
+.explanation-freshness p + p { margin-top: 6px; }
+.explanation-freshness strong { font-weight: 600; }
+.explanation-freshness form { margin-top: 8px; }
+.explanation-freshness .control { padding: 3px 8px; font-size: 11px; }
+.explanation-error { margin-top: 12px; color: var(--outgoing); }
+.explanation-document { margin-top: 14px; }
+.explanation-document p + p, .explanation-document p + ul, .explanation-document ul + p, .explanation-document ul + ul { margin-top: 10px; }
+.explanation-document ul { padding-left: 16px; list-style: disc; }
+.explanation-document li + li { margin-top: 5px; }
+.explanation-document strong { font-weight: 600; }
+.explanation-document code { background: var(--background); padding: 0 2px; border-radius: 2px; }
+.explanation-file { display: inline; color: var(--accent); text-align: left; vertical-align: baseline; overflow-wrap: anywhere; text-decoration: underline; text-underline-offset: 2px; border-radius: 2px; }
+.explanation-file:hover { background: var(--selected-surface); }
+.explanation-file:focus-visible { outline-offset: 1px; }
 .traversal-buttons { display: flex; gap: 6px; }
 .traversal-buttons button { flex: 1; min-width: 0; padding: 5px 6px; border: 1px solid var(--border); border-radius: 3px; font-size: 10px; background: var(--surface); }
 .traversal-buttons button:hover { border-color: var(--accent); }

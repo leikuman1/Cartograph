@@ -1,4 +1,6 @@
+import type { ModelRoleRecord } from "@/lib/ai/types";
 import type { Framework } from "@/lib/frameworks/taxonomy";
+import type { AnalysisResult } from "@/lib/parser/contract";
 import type { AnalysisStatus, PipelineStage } from "@/lib/pipeline/types";
 
 export type { AnalysisStatus };
@@ -100,6 +102,12 @@ export type Database = {
         Update: Partial<FileRow>;
         Relationships: [];
       };
+      ai_cache: {
+        Row: { organization_id: string; cache_key: string; model: string; operation: string; result: Record<string, unknown>; created_at: string };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       edges: {
         Row: EdgeRow;
         Insert: Pick<EdgeRow, "organization_id" | "analysis_id" | "source_file_id" | "target_file_id"> &
@@ -110,6 +118,34 @@ export type Database = {
     };
     Views: Record<never, never>;
     Functions: {
+      write_ai_cache: {
+        Args: {
+          p_organization_id: string;
+          p_cache_key: string;
+          p_model: string;
+          p_operation: "file" | "folder" | "classify";
+          p_result: Record<string, unknown>;
+        };
+        Returns: undefined;
+      };
+      write_ai_roles: {
+        Args: { p_analysis_id: string; p_run_id: string; p_model: string; p_roles: ModelRoleRecord[] };
+        Returns: boolean;
+      };
+      store_analysis_with_ai: {
+        Args: {
+          p_analysis_id: string;
+          p_run_id: string;
+          p_result: AnalysisResult;
+          p_model: string | null;
+          p_roles: ModelRoleRecord[];
+        };
+        Returns: boolean;
+      };
+      read_ai_roles: {
+        Args: { p_analysis_id: string; p_run_id: string; p_model: string };
+        Returns: unknown;
+      };
       ensure_organization: {
         Args: Record<never, never>;
         Returns: undefined;
@@ -125,6 +161,20 @@ export type Database = {
       rerun_analysis: {
         Args: { p_analysis_id: string };
         Returns: StartAnalysisResult[];
+      };
+      set_analysis_stage: {
+        Args: {
+          p_analysis_id: string;
+          p_run_id: string;
+          p_stage: PipelineStage;
+          p_message: string;
+          p_commit_sha?: string | null;
+        };
+        Returns: boolean;
+      };
+      fail_analysis: {
+        Args: { p_analysis_id: string; p_run_id: string; p_stage: PipelineStage; p_message: string };
+        Returns: boolean;
       };
       read_analysis_result: {
         Args: { p_analysis_id: string; p_run_id: string };
