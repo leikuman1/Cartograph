@@ -73,6 +73,73 @@ LangSmith record when configured. Explanations have a 240 KB complete-input limi
 and source reads a 1 MiB per-file limit; an oversized input fails explicitly
 instead of dropping neighbors or truncating source.
 
+## Evals
+
+Phase 11 evals run outside the web app. `scripts/load-env.ts` loads Next.js's own
+installed environment loader: shell variables win, then the mode-specific local
+file, `.env.local`, the mode-specific file, and `.env`. The default mode is
+`development`; `NODE_ENV=production` selects production files, and `test` skips
+`.env.local`. The parser still needs no web or database configuration.
+
+```sh
+pnpm eval:paths
+pnpm eval:paths --text "Reads src/fictional.ts." --paths src/real.ts
+pnpm eval:dataset
+pnpm eval:roles
+pnpm eval:prompts --limit 20
+pnpm test:evals
+```
+
+`eval:paths` reads up to 20 recent generated explanations from `LANGSMITH_PROJECT`
+(the limit can be 1–100), checks each raw answer against exactly the file paths
+supplied to that model call, and attaches `invented_paths` feedback to its run.
+It supports existing phase 10 OpenAI traces as well as new `explanation-answer`
+traces. It reports skipped records, fails on an empty selection, and prints the
+run ID, invented path and surrounding text for every failure. Scores are binary:
+1 means no invented path-like reference, 0 means at least one. The summary is the
+percentage of passing explanations. Any failure exits with status 1. The explicit
+text form runs offline; `--paths` takes comma-separated exact supplied file paths.
+Folder references derived from supplied paths and known framework/prose names are
+not treated as invented files. Extraction is a deterministic syntax heuristic;
+it cannot identify arbitrary filenames mentioned without recognizable path syntax.
+
+The app also evaluates every newly generated raw explanation before formatting,
+including answers rejected by the renderer. With tracing enabled, the answer and
+evidence are saved in the `explanation-answer` trace and uploaded as feedback.
+Feedback uploads wait at most three seconds before releasing the explanation
+and its cache write; delivery can continue in the background after that deadline.
+Timeouts and upload failures are logged; the evaluation stays in the trace output.
+Cache hits retain their existing zero-model-call behavior. Tracing disabled means
+no remote feedback is sent.
+
+`eval:dataset` inspects 36 checked-in synthetic source files without model calls.
+Their reference labels are recalculated by the real Express, NestJS and React
+adapters. Only convention-assigned labels within the classifier's allowed roles
+and files eligible for production classification enter the holdout. The model
+sees source and path with the reference role removed. `eval:roles` creates a
+LangSmith dataset and experiment and reports exact-match accuracy. This holdout
+covers service, model, component and hook; it does not measure repository, util or
+config accuracy, and synthetic convention coverage is not production accuracy.
+
+`eval:prompts` freezes recent real explanation inputs once, then runs independent
+experiments for current `phase10-2` and retired `phase10-1` on that same dataset.
+The retired prompt lives only in `evals/prompts.ts`. Each experiment reports
+path-check pass rate and a **subjective model-judge usefulness score**, printed
+side by side with the difference in percentage points. The judge uses a fixed
+0–4 rubric, normalized to percent, and sees no prompt-version label. The console
+states which version scored higher, or a tie; model judgments and generation
+variance limit that conclusion. Failed runs or missing scores stop the command;
+partial results are never silently averaged.
+
+Recorded evals require `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY`. Recent
+path checks work even with absent or invalid model settings; role and prompt
+experiments still validate the pinned model, existing model key and endpoint.
+Those experiments send fixture or recorded repository inputs to the configured
+services and consume model tokens. Experiments use in-memory caches inside their traces; they never
+read or write application database rows. Experiment traffic is excluded from the
+recent-production selection. Run these live commands for the phase 11 acceptance
+check; `test:evals` uses local fixtures and mocked services only.
+
 ## Clerk configuration
 
 In Clerk Dashboard, under **Organizations > Settings**:
@@ -316,12 +383,14 @@ pnpm test:parser
 pnpm test:pipeline
 pnpm test:environment
 pnpm test:ai
+pnpm test:evals
 pnpm build
 node --test scripts/organizations.test.mjs
 pnpm db:verify
 pnpm db:advisors
 ```
 
+Run the phase 11 live eval acceptance check in `docs/specs/phrase-11.md` manually.
 Run the phase 10 browser acceptance check in `docs/specs/phrase-10.md` manually.
 The phase 9 CommonJS and Express checks remain manual as well.
 The phase 8 framework checks and phase 7 progress checks, including watching

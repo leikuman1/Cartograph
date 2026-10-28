@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { Client } from "langsmith";
 import { traceable } from "langsmith/traceable";
+import type { PathEvaluation } from "./path-evaluation";
 import { wrapOpenAI } from "langsmith/wrappers/openai";
 import { aiConfiguration } from "./config";
 
@@ -37,12 +38,38 @@ export async function generateJson(system: string, input: unknown): Promise<unkn
   catch { throw new Error("The model did not return valid JSON. Try again."); }
 }
 
-export async function tracedOperation<T>(name: string, metadata: Record<string, string>, work: () => Promise<T>): Promise<T> {
+export async function tracedOperation<T>(
+  name: string, metadata: Record<string, string>, work: () => Promise<T>, inputs?: Record<string, unknown>,
+): Promise<T> {
   const config = aiConfiguration();
   return traceable(work, {
     name, run_type: "chain", metadata, tracingEnabled: config.tracing, project_name: config.tracingProject,
+    ...(inputs ? { processInputs: () => inputs } : {}),
     ...(config.tracing ? { client: traceClient() } : {}),
   })();
+}
+
+const feedbackProjects = new Map<string, Promise<string>>();
+export async function recordPathFeedback(runId: string, evaluation: PathEvaluation, projectName = aiConfiguration().tracingProject) {
+  const config = aiConfiguration();
+  if (!config.tracing) return;
+  try {
+    const client = traceClient();
+    await flushTraces();
+    let project = feedbackProjects.get(projectName);
+    if (!project) {
+      project = client.readProject({ projectName }).then(project => project.id);
+      feedbackProjects.set(projectName, project);
+    }
+    await client.createFeedback({
+      runId, sessionId: await project, key: evaluation.key, score: evaluation.score,
+      comment: JSON.stringify(evaluation), feedbackSourceType: "api",
+      sourceInfo: { evaluator: evaluation.evaluator, method: "deterministic set membership" },
+    });
+  } catch {
+    feedbackProjects.delete(projectName);
+    console.error("LangSmith invented-path feedback upload failed; the evaluation remains in the explanation-answer trace output.");
+  }
 }
 
 export async function flushTraces() {
